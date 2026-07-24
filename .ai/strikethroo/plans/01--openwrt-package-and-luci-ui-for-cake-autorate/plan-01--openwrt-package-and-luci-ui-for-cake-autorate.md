@@ -382,10 +382,12 @@ The graph is acyclic: every dependency edge points from a lower task ID to a hig
 
 **Phase 2 outcome (verified):** Pinned OpenWrt SDK **25.12.5** (25.12 series confirmed current stable; default pkg manager **apk**). `net/cake-autorate/` + `luci/luci-app-cake-autorate/` feed created. Both packages compile with exit 0 and are `arch: noarch` (`PKG_ARCH:=all` confirmed via `apk adbdump`); install tree verified (`/usr/lib/cake-autorate`, `/usr/libexec/cake-autorate`, `/etc/config/cake-autorate`, `/etc/init.d`, `/etc/collectd/conf.d`). UCI schema covers all 66 upstream options 1:1 with correct int/float/bool/string/list typing; the schema gate passes 32/32 and a name-for-name coverage diff is empty. Type/coverage metadata lives in `docs/uci-option-schema.tsv` (10 columns incl. `managed`, `group`, `essential`) for tasks 004/007 to consume. Independently re-verified: fresh source hash match, fresh schema gate, fresh SDK compile of both `.apk`s.
 
-### Phase 3: Config Bridge and LuCI Form
+### ✅ Phase 3: Config Bridge and LuCI Form
 **Parallel Tasks:**
-- Task 004: UCI-to-shell config bridge, with pinned output and bidirectional coverage (depends on: 001, 003)
-- Task 007: luci-app-cake-autorate config form UI — Essentials + collapsible groups + search (depends on: 001, 003)
+- ✔️ Task 004: UCI-to-shell config bridge, with pinned output and bidirectional coverage (depends on: 001, 003) — `completed`
+- ✔️ Task 007: luci-app-cake-autorate config form UI — Essentials + collapsible groups + search (depends on: 001, 003) — `completed`
+
+**Phase 3 outcome (verified):** `cake-autorate-bridge.sh` renders deterministic, idempotent per-instance `config.<name>.sh`: strict int/float/bool/string/list typing, full shell-escaping of string values, forced logging options written last (hostile-UCI test proves a user cannot disable the stats feed), and an in-code bidirectional-coverage assertion (stray/dropped key → fatal). 35/35 bridge tests pass, shellcheck clean. LuCI config form (`overview.js` + `options.js`) renders all 66 options — Essentials tab first, six collapsible group tabs, client-side search — with a load-time coverage guard; menu at Services → CAKE Autorate, ACLs scoped to uci + log files. Verified: 13/13 JS unit tests, `node --check` clean, 66-option coverage diff empty, both JSONs valid, and a fresh SDK compile of `luci-app-cake-autorate` (exit 0, packages overview/options/menu/acl). A full-repo security review found **no High/Medium issues** — the UCI→root-shell injection surface is correctly escaped/validated.
 
 ### Phase 4: Service, Statistics, and rpcd Backend
 **Parallel Tasks:**

@@ -2,7 +2,7 @@
 id: 4
 group: "config"
 dependencies: [1, 3]
-status: "pending"
+status: "completed"
 created: 2026-07-23
 skills:
   - shell

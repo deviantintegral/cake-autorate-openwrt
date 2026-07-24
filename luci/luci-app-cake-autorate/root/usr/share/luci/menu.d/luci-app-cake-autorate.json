@@ -1,5 +1,5 @@
 {
-	"admin/network/cake-autorate": {
+	"admin/services/cake-autorate": {
 		"title": "CAKE Autorate",
 		"order": 60,
 		"action": {

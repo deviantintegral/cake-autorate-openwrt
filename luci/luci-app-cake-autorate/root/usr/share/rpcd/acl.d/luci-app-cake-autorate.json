@@ -1,8 +1,12 @@
 {
 	"luci-app-cake-autorate": {
-		"description": "Grant access to cake-autorate configuration and status",
+		"description": "Grant access to cake-autorate configuration and runtime log files",
 		"read": {
-			"uci": [ "cake-autorate" ]
+			"uci": [ "cake-autorate" ],
+			"file": {
+				"/var/log/cake-autorate.*.log": [ "read" ],
+				"/var/log/cake-autorate.*.log.old": [ "read" ]
+			}
 		},
 		"write": {
 			"uci": [ "cake-autorate" ]
