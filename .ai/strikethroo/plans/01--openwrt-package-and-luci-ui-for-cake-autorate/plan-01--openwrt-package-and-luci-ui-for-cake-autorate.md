@@ -415,9 +415,11 @@ The **VM integration harness** (`tests/integration/run.sh` + Python vmdriver/har
 
 **Phase 6 outcome (verified live):** A shared Playwright harness (`tests/ui/`) brings up real LuCI via a new opt-in `tests/integration/run.sh --serve` mode (boots the pinned 25.12.5 VM, installs the apks, configures two instances, forwards guest :80→host :8080; `globalSetup`/`globalTeardown`). **Functional suite: 6/6 specs pass live** (config groups + search, instance CRUD, essentials-only, status populates, Start/Stop/Restart). **Visual suite: 5/5 specs pass live against 12 committed baselines** (status view + config: empty, single, multi, post-Save&Apply, 7 group tabs) with all `[data-live="1"]` dynamic cells masked (pinned chromium + 1280×900 viewport); a browsable human-review gallery (`generate-gallery.js` → `index.html`) is always published as a CI artifact. Independently re-verified by the orchestrator: fresh `--update-snapshots` then a fresh no-update run passing 5/5, plus all 6 functional. node_modules/browsers/test-results/gallery gitignored; 12 baseline PNGs committed. _(A test-code defect — the empty-config and post-Save&Apply specs hung waiting for option rows absent in an empty config — was fixed by waiting on the always-present toolbar; the functional run also independently confirmed the libuci fix works end-to-end.)_
 
-### Phase 7: Continuous Integration
+### ✅ Phase 7: Continuous Integration
 **Parallel Tasks:**
-- Task 013: GitHub Actions CI pipeline — Build, Integration (KVM-aware), UI (depends on: 002, 010, 011, 012)
+- ✔️ Task 013: GitHub Actions CI pipeline — Build, Integration (KVM-aware), UI (depends on: 002, 010, 011, 012) — `completed`
+
+**Phase 7 outcome (verified):** `.github/workflows/ci.yml` — one workflow on push + pull_request, three jobs pinned to 25.12.5: **build** (SDK, minimal `.config` avoiding `CONFIG_ALL`, single compile of both packages — no arch matrix — uploads `.apk` artifacts, caches SDK/dl/build_dir), **integration** (needs build; installs qemu/e2fsprogs/python3, runs `tests/integration/run.sh` + `--negative` when `/dev/kvm` present, uploads VM evidence), **ui** (needs build; Playwright functional + visual + always-published gallery). KVM absence is a **visible skip** — `::warning` annotation + a `GITHUB_STEP_SUMMARY` "visible SKIP, not a pass" line, VM steps gated on `kvm.outputs.available` — never a silent green; build + gallery stay green independently. Verified: `actionlint` clean (exit 0, shellcheck-checked run blocks), YAML parses with the correct `needs` graph, and every referenced script/path exists. Live execution is deferred to GitHub (no remote yet — a documented one-time setup step, not a code deliverable).
 
 ### Phase 8: Documentation
 **Parallel Tasks:**

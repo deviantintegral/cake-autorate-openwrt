@@ -1,0 +1,334 @@
+# cake-autorate OpenWrt package + LuCI UI — Continuous Integration
+#
+# One workflow, three jobs, all pinned to OpenWrt 25.12.5:
+#
+#   build       Set up the 25.12.5 SDK, register THIS repo as a `src-link` feed,
+#               build net/cake-autorate + luci/luci-app-cake-autorate ONCE
+#               (packages are PKG_ARCH:=all / noarch, so there is NO per-arch
+#               matrix) and upload the resulting .apk files.
+#   integration Boot the task-10 QEMU/KVM VM harness against the built apks.
+#               needs: build.
+#   ui          Run the task-11 functional + task-12 visual Playwright suites and
+#               publish the human-review gallery. needs: build.
+#
+# KVM policy: GitHub-hosted `ubuntu-*` runners DO expose /dev/kvm (nested virt),
+# so integration + ui-serve normally run for real. When a runner cannot
+# virtualize (e.g. a self-hosted box without /dev/kvm, or a future runner-image
+# regression) the VM-backed steps are skipped VISIBLY — a ::warning annotation
+# plus a job-summary line — never a silent green pass. `build` and the `ui`
+# gallery stay green independently so a KVM-less runner still yields signal.
+#
+# Self-hosted fallback: to guarantee virtualization, register a self-hosted
+# runner on a KVM-capable host and change the `integration` / `ui` `runs-on:` to
+# your runner label (e.g. [self-hosted, kvm]). The KVM-detection steps below then
+# see /dev/kvm and run the VM for real with no other edits.
+#
+# NOTE: this repo has no git remote yet; the workflow cannot execute until it is
+# pushed to GitHub (documented as a prerequisite in the task-14 testing doc).
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Least-privilege: jobs only read the checkout and read/write artifacts.
+permissions:
+  contents: read
+
+env:
+  # Single source of truth for the 25.12.5 pin, reused by every job.
+  OWRT_VERSION: "25.12.5"
+  SDK_NAME: "openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64"
+  SDK_ARCHIVE: "openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+  SDK_URL_DIR: "https://downloads.openwrt.org/releases/25.12.5/targets/x86/64"
+  # Where the .apk artifacts land inside the SDK, and what they are named.
+  APK_SUBPATH: "bin/packages/x86_64/cakeautorate"
+  APK_ARTIFACT: "cake-autorate-apks"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # BUILD — set up the pinned SDK, build the feed once, publish the .apk files.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build feed (OpenWrt 25.12.5 SDK)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install SDK host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib \
+            gettext git libncurses-dev libssl-dev python3 python3-setuptools \
+            rsync unzip zlib1g-dev file wget zstd
+
+      - name: Cache SDK download + dl/ + build_dir
+        uses: actions/cache@v4
+        with:
+          # Bust the cache when the SDK pin or either package Makefile changes.
+          key: owrt-${{ env.OWRT_VERSION }}-${{ hashFiles('net/cake-autorate/Makefile', 'luci/luci-app-cake-autorate/Makefile') }}
+          restore-keys: |
+            owrt-${{ env.OWRT_VERSION }}-
+          path: |
+            ~/sdk-cache
+            ${{ github.workspace }}/sdk/dl
+            ${{ github.workspace }}/sdk/build_dir
+
+      - name: Download + extract the 25.12.5 SDK
+        run: |
+          mkdir -p ~/sdk-cache
+          if [ ! -f ~/sdk-cache/"$SDK_ARCHIVE" ]; then
+            echo "== fetching $SDK_ARCHIVE =="
+            wget -q -O ~/sdk-cache/"$SDK_ARCHIVE" "$SDK_URL_DIR/$SDK_ARCHIVE"
+          else
+            echo "== using cached $SDK_ARCHIVE =="
+          fi
+          rm -rf "$GITHUB_WORKSPACE/sdk"
+          mkdir -p "$GITHUB_WORKSPACE/sdk"
+          tar --use-compress-program=unzstd \
+            -xf ~/sdk-cache/"$SDK_ARCHIVE" \
+            -C "$GITHUB_WORKSPACE/sdk" --strip-components=1
+
+      - name: Register this repo as the `cakeautorate` src-link feed
+        working-directory: ${{ github.workspace }}/sdk
+        run: |
+          # Point the feed at the checked-out repo (contains net/ + luci/).
+          echo "src-link cakeautorate $GITHUB_WORKSPACE" > feeds.conf.default
+          cat feeds.conf.default
+          ./scripts/feeds update cakeautorate
+          ./scripts/feeds install -p cakeautorate -a
+
+      - name: Configure a MINIMAL build (avoid CONFIG_ALL — no kernel build)
+        working-directory: ${{ github.workspace }}/sdk
+        run: |
+          {
+            echo "CONFIG_PACKAGE_cake-autorate=m"
+            echo "CONFIG_PACKAGE_luci-app-cake-autorate=m"
+          } > .config
+          make defconfig
+
+      - name: Build cake-autorate
+        working-directory: ${{ github.workspace }}/sdk
+        run: make package/cake-autorate/compile V=s
+
+      - name: Build luci-app-cake-autorate
+        working-directory: ${{ github.workspace }}/sdk
+        run: make package/luci-app-cake-autorate/compile V=s
+
+      - name: Collect + list the built .apk files
+        working-directory: ${{ github.workspace }}/sdk
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/apks"
+          # PKG_ARCH:=all -> the apks live under the x86_64 feed dir but are noarch.
+          find "$APK_SUBPATH" -name '*.apk' -print -exec cp {} "$GITHUB_WORKSPACE/apks/" \;
+          echo "== apks staged for upload =="
+          ls -l "$GITHUB_WORKSPACE/apks"
+          test -n "$(ls -A "$GITHUB_WORKSPACE/apks")" || { echo "ERROR: no .apk produced"; exit 1; }
+
+      - name: Build summary
+        if: always()
+        run: |
+          {
+            echo "### Build (OpenWrt ${OWRT_VERSION})"
+            if [ -d "$GITHUB_WORKSPACE/apks" ] && [ -n "$(ls -A "$GITHUB_WORKSPACE/apks" 2>/dev/null)" ]; then
+              echo "Built noarch packages (no per-arch matrix):"
+              echo ""
+              ( cd "$GITHUB_WORKSPACE/apks" && for f in *.apk; do echo "- \`$f\`"; done )
+            else
+              echo "**FAILED** — no .apk artifacts were produced."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload .apk artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK_ARTIFACT }}
+          path: apks/*.apk
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # INTEGRATION — boot the task-10 VM harness against the built apks (needs KVM).
+  # ---------------------------------------------------------------------------
+  integration:
+    name: VM integration harness
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download built .apk artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.APK_ARTIFACT }}
+          path: apks
+
+      - name: Install QEMU + e2fsprogs + python3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils e2fsprogs python3 wget gzip
+
+      - name: Detect /dev/kvm
+        id: kvm
+        run: |
+          if [ -e /dev/kvm ] && qemu-system-x86_64 --version >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "KVM available — integration harness will run for real."
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Integration skipped (no KVM)::/dev/kvm unavailable on this runner — the VM integration harness was skipped. Use a KVM-capable (hosted ubuntu-* or self-hosted) runner to run it."
+          fi
+
+      - name: Run integration harness (positive)
+        if: steps.kvm.outputs.available == 'true'
+        env:
+          # Point the harness at the downloaded apks instead of the SDK bin path.
+          CA_IT_APK_DIR: ${{ github.workspace }}/apks
+          # Fail hard if KVM vanished between detection and here (no silent skip).
+          CA_IT_REQUIRE_KVM: "1"
+        run: ./tests/integration/run.sh
+
+      - name: Run integration harness (negative self-test)
+        if: steps.kvm.outputs.available == 'true'
+        env:
+          CA_IT_APK_DIR: ${{ github.workspace }}/apks
+          CA_IT_REQUIRE_KVM: "1"
+        run: |
+          # A broken config MUST fail; a zero exit here means the assertions
+          # have no teeth. Invert the exit code so "harness passed" == failure.
+          if ./tests/integration/run.sh --negative; then
+            echo "::error title=Negative self-test did not fail::run.sh --negative exited 0 — assertions are not enforcing"
+            exit 1
+          fi
+          echo "Negative self-test correctly failed (assertions have teeth)."
+
+      - name: Integration summary
+        if: always()
+        run: |
+          {
+            echo "### Integration (OpenWrt ${OWRT_VERSION} VM)"
+            if [ "${{ steps.kvm.outputs.available }}" = "true" ]; then
+              echo "KVM present — harness executed (positive + negative self-test)."
+            else
+              echo ":warning: **INTEGRATION SKIPPED: no KVM** — this runner cannot"
+              echo "virtualize (/dev/kvm absent). This is a visible SKIP, not a pass."
+              echo "Run on a KVM-capable hosted \`ubuntu-*\` or a self-hosted KVM runner."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-artifacts
+          path: tests/integration/artifacts/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # UI — task-11 functional + task-12 visual Playwright suites + review gallery.
+  # ---------------------------------------------------------------------------
+  ui:
+    name: LuCI UI (Playwright functional + visual + gallery)
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download built .apk artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.APK_ARTIFACT }}
+          path: apks
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install QEMU + e2fsprogs (serve mode boots the same VM)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils e2fsprogs python3 wget gzip
+
+      - name: Install Playwright + Chromium
+        working-directory: tests/ui
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Detect /dev/kvm
+        id: kvm
+        run: |
+          if [ -e /dev/kvm ] && qemu-system-x86_64 --version >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "KVM available — UI suites will run against a live LuCI VM."
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=UI VM suites skipped (no KVM)::/dev/kvm unavailable — the functional + visual suites need a live LuCI VM and were skipped. The review gallery (built from committed baselines) still publishes."
+          fi
+
+      - name: Run functional suite
+        if: steps.kvm.outputs.available == 'true'
+        working-directory: tests/ui
+        env:
+          # global-setup.js -> run.sh --serve reads CA_IT_APK_DIR for the apks.
+          CA_IT_APK_DIR: ${{ github.workspace }}/apks
+          CA_IT_REQUIRE_KVM: "1"
+        run: npx playwright test --project=functional
+
+      - name: Run visual suite (diff is advisory — never gates the pipeline)
+        if: steps.kvm.outputs.available == 'true'
+        working-directory: tests/ui
+        env:
+          CA_IT_APK_DIR: ${{ github.workspace }}/apks
+          CA_IT_REQUIRE_KVM: "1"
+        # Baselines are environment-specific (fonts/GPU); a pixel diff must not
+        # fail CI. It uploads the HTML diff report for human review instead.
+        continue-on-error: true
+        run: npx playwright test --project=visual
+
+      - name: Generate human-review gallery (from committed baselines)
+        if: always()
+        working-directory: tests/ui
+        # Independent of KVM: the gallery is built from the committed baseline
+        # PNGs, so it always publishes even when the VM steps were skipped.
+        run: node visual/generate-gallery.js
+
+      - name: UI summary
+        if: always()
+        run: |
+          {
+            echo "### UI (Playwright)"
+            if [ "${{ steps.kvm.outputs.available }}" = "true" ]; then
+              echo "KVM present — functional + visual suites ran against a live LuCI VM."
+              echo "Visual diff is advisory (see the Playwright HTML report artifact)."
+            else
+              echo ":warning: **UI VM SUITES SKIPPED: no KVM** — functional + visual"
+              echo "need a live LuCI VM and were skipped (visible SKIP, not a pass)."
+            fi
+            echo "Review gallery published as the \`ui-gallery\` artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Playwright report + visual diffs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-playwright-report
+          path: |
+            tests/ui/playwright-report/
+            tests/ui/test-results/
+          if-no-files-found: ignore
+
+      - name: Upload review gallery
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-gallery
+          path: tests/ui/visual/gallery/
+          if-no-files-found: ignore
