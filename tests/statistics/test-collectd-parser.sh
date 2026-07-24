@@ -99,8 +99,8 @@ have 'primary dl achieved rate'  'PUTVAL "testhost/cake_autorate-primary/bitrate
 have 'primary ul achieved rate'  'PUTVAL "testhost/cake_autorate-primary/bitrate-ul_achieved" interval=30 N:19000'
 have 'primary dl shaper rate'    'PUTVAL "testhost/cake_autorate-primary/bitrate-dl_shaper" interval=30 N:45000'
 have 'primary ul shaper rate'    'PUTVAL "testhost/cake_autorate-primary/bitrate-ul_shaper" interval=30 N:18000'
-have 'primary dl owd delta'      'PUTVAL "testhost/cake_autorate-primary/delay-dl_owd_delta" interval=30 N:1200'
-have 'primary ul owd delta'      'PUTVAL "testhost/cake_autorate-primary/delay-ul_owd_delta" interval=30 N:800'
+have 'primary dl owd delta'      'PUTVAL "testhost/cake_autorate-primary/gauge-dl_owd_delta_us" interval=30 N:1200'
+have 'primary ul owd delta'      'PUTVAL "testhost/cake_autorate-primary/gauge-ul_owd_delta_us" interval=30 N:800'
 have 'primary dl load = high(2)' 'PUTVAL "testhost/cake_autorate-primary/gauge-dl_load" interval=30 N:2'
 have 'primary ul load = low(1)'  'PUTVAL "testhost/cake_autorate-primary/gauge-ul_load" interval=30 N:1'
 
@@ -116,7 +116,7 @@ hasnt 'DATA line not misread as a rate'                    'N:extra'
 have 'secondary dl achieved rate'      'PUTVAL "testhost/cake_autorate-secondary/bitrate-dl_achieved" interval=30 N:60000'
 have 'secondary dl load = high+bb(12)' 'PUTVAL "testhost/cake_autorate-secondary/gauge-dl_load" interval=30 N:12'
 have 'secondary ul load = idle(0)'     'PUTVAL "testhost/cake_autorate-secondary/gauge-ul_load" interval=30 N:0'
-have 'secondary dl owd delta'          'PUTVAL "testhost/cake_autorate-secondary/delay-dl_owd_delta" interval=30 N:30000'
+have 'secondary dl owd delta'          'PUTVAL "testhost/cake_autorate-secondary/gauge-dl_owd_delta_us" interval=30 N:30000'
 
 # ---- assertions: tertiary (rotated -> read from .log.old) -----------------
 have 'tertiary falls back to .old rate' 'PUTVAL "testhost/cake_autorate-tertiary/bitrate-dl_achieved" interval=30 N:7000'

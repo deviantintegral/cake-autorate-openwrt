@@ -66,6 +66,10 @@ run_scenario() {
 	{
 		printf '#!/bin/sh\n'
 		printf 'echo BRIDGE_CALLED >> "%s"\n' "$calls_out"
+		# Record the config-prefix env the init handed us, so a test can prove the
+		# init keeps the bridge's output dir in sync with where it reads configs.
+		# shellcheck disable=SC2016  # the ${...} must reach the generated stub literally
+		printf 'echo "BRIDGE_PREFIX ${CAKE_AUTORATE_CONFIG_PREFIX:-UNSET}" >> "%s"\n' "$calls_out"
 		case "$bridge_mode" in
 		fail)
 			printf 'exit 1\n' ;;
@@ -131,6 +135,14 @@ run_scenario "wan_dsl:1 wan_lte:1 wan_off:0" ok start_service "$c" "$d"
 [ "$(count '^BRIDGE_CALLED$' "$c")" = 1 ] \
 	&& ok "bridge invoked exactly once" \
 	|| fail "bridge should run exactly once (got $(count '^BRIDGE_CALLED$' "$c"))"
+
+# The init must pass its config prefix to the bridge so generation and lookup
+# never desync when CA_CONFIG_PREFIX is non-default.
+if grep -qxF "BRIDGE_PREFIX $d" "$c"; then
+	ok "init passes CAKE_AUTORATE_CONFIG_PREFIX ($d) to the bridge"
+else
+	fail "bridge not given the config prefix: $(grep '^BRIDGE_PREFIX' "$c")"
+fi
 
 # bridge must precede the first OPEN
 first_open=$(grep -n '^OPEN ' "$c" | head -n1 | cut -d: -f1)

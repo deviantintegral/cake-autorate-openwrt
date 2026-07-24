@@ -68,6 +68,22 @@ PROG=cake-autorate-bridge
 die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
 warn() { printf '%s: %s\n' "$PROG" "$*" >&2; }
 
+# logmsg: a warning that must be VISIBLE to an operator, not just on the bridge's
+# stderr (which is swallowed when the init script runs the bridge). Mirror it to
+# syslog so it lands in `logread`. Used for user-facing config problems that the
+# bridge tolerates (a skipped instance, dropped reflectors) rather than aborts on.
+logmsg() {
+	warn "$*"
+	command -v logger >/dev/null 2>&1 && logger -t "$PROG" -p daemon.warn "$*"
+}
+
+# section_skip: a per-section failure. It must NOT abort the whole run -- one
+# misconfigured instance may never take down the others (the main loop ignores
+# process_section's exit status, so `return 1` simply moves on to the next
+# section, and the daemon config for this instance is left ungenerated; the init
+# script's start_instance then skips it with its own warning).
+section_skip() { logmsg "instance $1 skipped: $2"; }
+
 TAB=$(printf '\t')
 SENTINEL='__CAKE_AUTORATE_UNSET__'
 
@@ -178,6 +194,12 @@ bounded_range() {
 
 schema_type() { _schema | awk -F'\t' -v n="$1" '$1==n {print $2; exit}'; }
 
+# Space-delimited list of the 66 valid option names, parsed ONCE. The per-section
+# unknown-key check does membership against this instead of forking `_schema|awk`
+# for every option of every instance (that was ~150 short-lived procs per apply
+# on a 2-instance box).
+SCHEMA_NAMES=" $(_schema | cut -f1 | tr '\n' ' ')"
+
 # --------------------------------------------------------------------------
 # Value coercion. Each prints the emitted lexical form to stdout, or prints a
 # diagnostic to stderr and returns 1. Callers MUST test the return status
@@ -261,17 +283,37 @@ normalize_rate() {
 
 # Reflector validation (IPv4 or IPv6 literal).
 valid_reflector() {
-	awk -v a="$1" 'BEGIN{
-		if (a ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
-			split(a, o, ".")
-			for (i = 1; i <= 4; i++) {
-				if (o[i] == "" || length(o[i]) > 3 || o[i] + 0 > 255) exit 1
-			}
-			exit 0
+	awk -v a="$1" '
+	function valid_ipv4(s,   o, i) {
+		if (s !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) return 0
+		split(s, o, ".")
+		for (i = 1; i <= 4; i++)
+			if (o[i] == "" || length(o[i]) > 3 || o[i] + 0 > 255) return 0
+		return 1
+	}
+	# A structural IPv6 check (not just a charset match): 1-4 hex digits per
+	# group, at most one "::" zero-compression, 8 groups when uncompressed and
+	# >=1 real group when compressed. Rejects "1:2", ":", "::", "g::1", etc.
+	# (IPv4-embedded forms like ::ffff:1.2.3.4 are intentionally not accepted --
+	# reflectors are plain literals in practice.)
+	function valid_ipv6(s,   tmp, dc, np, parts, i, seg, filled) {
+		if (s !~ /:/ || s ~ /:::/) return 0
+		tmp = s
+		while (match(tmp, /::/)) { dc++; tmp = substr(tmp, RSTART + 2) }
+		if (dc > 1) return 0
+		np = split(s, parts, ":")
+		filled = 0
+		for (i = 1; i <= np; i++) {
+			seg = parts[i]
+			if (seg == "") continue
+			if (seg !~ /^[0-9A-Fa-f][0-9A-Fa-f]?[0-9A-Fa-f]?[0-9A-Fa-f]?$/) return 0
+			filled++
 		}
-		if (a ~ /^[0-9A-Fa-f:.]+$/ && a ~ /:/ && index(a, ":::") == 0) exit 0
-		exit 1
-	}'
+		if (dc == 1) return (filled >= 1 && filled <= 7)
+		return (filled == 8)
+	}
+	BEGIN { exit (valid_ipv4(a) || valid_ipv6(a)) ? 0 : 1 }
+	'
 }
 
 # Read newline-separated reflector entries on stdin, emit the bash array literal.
@@ -358,10 +400,10 @@ _libuci_emit_section() {
 # --------------------------------------------------------------------------
 process_section() {
 	local name="$1" rec="$2"
-	local enabled_raw enabled t v line vals out present expected emitted line_count uniq_count kbps
+	local enabled_raw enabled v line vals out present present_kept expected emitted line_count uniq_count kbps DROPPED
 
 	case "$name" in
-		''|*[!A-Za-z0-9_]*) die "invalid instance name '$name' (must match [A-Za-z0-9_]+)" ;;
+		''|*[!A-Za-z0-9_]*) section_skip "$name" "invalid instance name (must match [A-Za-z0-9_]+)"; return 1 ;;
 	esac
 
 	# --instance filter
@@ -369,26 +411,36 @@ process_section() {
 		return 0
 	fi
 
-	# enabled gate (default off). --stdout inspects a specific instance
-	# regardless, so it bypasses the gate.
+	# enabled gate (default off). An unparseable value is treated as DISABLED
+	# (matching the init's config_get_bool) rather than aborting the whole run,
+	# so one bad `enabled` can never stop the other instances. --stdout inspects a
+	# specific instance regardless, so it bypasses the gate.
 	enabled_raw=$(grep -E "^option${TAB}enabled${TAB}" "$rec" | tail -n1)
 	enabled_raw=${enabled_raw#option"${TAB}"enabled"${TAB}"}
-	enabled=$(coerce_bool enabled "$enabled_raw") || die "$name: bad enabled value"
+	if ! enabled=$(coerce_bool enabled "$enabled_raw"); then
+		warn "$name: unparseable enabled value '$enabled_raw'; treating as disabled"
+		enabled=0
+	fi
 	if [ "$STDOUT" -eq 0 ] && [ "$enabled" != 1 ]; then
 		return 0
 	fi
 
 	# Unknown-key check + collect the present user-option set. `enabled` is the
-	# one package-local key and is never an upstream option.
+	# one package-local key and is never an upstream option. Membership is checked
+	# against the pre-parsed SCHEMA_NAMES (no per-option subprocess).
 	present=$(awk -F'\t' -v s="$SENTINEL" '
 		($1=="option" || $1=="list") && $2!="enabled" { print $2 }
 	' "$rec" | sort -u)
 	for v in $present; do
-		t=$(schema_type "$v")
-		[ -n "$t" ] || die "$name: unknown UCI option '$v' (a key outside the 66 upstream options is fatal to the daemon)"
+		case "$SCHEMA_NAMES" in
+			*" $v "*) ;;
+			*) section_skip "$name" "unknown UCI option '$v' (not one of the 66 upstream options)"; return 1 ;;
+		esac
 	done
 
 	out="$WORK/config.out"
+	DROPPED="$WORK/dropped"
+	: > "$DROPPED"
 	{
 		printf '# Generated by %s from UCI package cake-autorate -- DO NOT EDIT.\n' "$PROG"
 		printf '# Instance: %s   Log: /var/log/cake-autorate.%s.log\n' "$name" "$name"
@@ -403,7 +455,15 @@ process_section() {
 			# gather list values in file order
 			vals=$(awk -F'\t' -v n="$t_name" '$1=="list" && $2==n {print $3}' "$rec")
 			[ -n "$vals" ] || continue
-			line=$(printf '%s\n' "$vals" | emit_reflectors) || die "$name: $t_name: no valid entries"
+			if ! line=$(printf '%s\n' "$vals" | emit_reflectors); then
+				# Every entry was invalid. Rather than abort the whole run (which
+				# would stop every OTHER instance too), drop the option so the
+				# daemon falls back to its built-in default reflectors, and record
+				# the omission so the coverage assertion does not flag it.
+				logmsg "$name: no valid $t_name entries; falling back to daemon defaults"
+				printf '%s\n' "$t_name" >> "$DROPPED"
+				continue
+			fi
 			printf '%s\n' "$line" >> "$out"
 			continue
 		fi
@@ -441,9 +501,14 @@ process_section() {
 				;;
 			*) die "$name: internal: unknown type '$t_type' for '$t_name'" ;;
 		esac
-	done || exit 1
-	# `while | die` runs in a sub-shell under some shells; guard against a
-	# silent failure by re-checking below via the coverage assertion.
+	done || {
+		# A per-option coercion failed inside the (sub-shell) pipeline above; its
+		# specific message is already on stderr. Skip THIS instance rather than
+		# aborting every instance, and drop any partial output.
+		section_skip "$name" "a config value failed validation"
+		rm -f "$out"
+		return 1
+	}
 
 	# Pass 2: forced options, fixed order, pinned values.
 	printf '# --- package-managed (forced) options ---\n' >> "$out"
@@ -459,9 +524,18 @@ process_section() {
 	# ----- Bidirectional coverage assertion -----
 	# expected = present-user-options  UNION  forced-names
 	# emitted  = keys actually written to the file
+	# expected = (present-user-options MINUS intentionally-dropped ones) UNION
+	# forced-names. A dropped option (e.g. an all-invalid reflector list that fell
+	# back to daemon defaults) is deliberately not emitted, so it is excluded here
+	# rather than tripping the assertion.
 	# shellcheck disable=SC2086  # deliberate word-splitting of the name lists
+	present_kept=$(printf '%s\n' $present | sed '/^$/d' | sort -u)
+	if [ -s "$DROPPED" ]; then
+		present_kept=$(printf '%s\n' "$present_kept" | grep -vxF -f "$DROPPED" || true)
+	fi
+	# shellcheck disable=SC2086
 	expected=$(
-		{ printf '%s\n' $present; printf '%s\n' $FORCED_NAMES; } \
+		{ printf '%s\n' $present_kept; printf '%s\n' $FORCED_NAMES; } \
 			| sed '/^$/d' | sort -u
 	)
 	emitted=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$out" | sed 's/=.*//')
@@ -469,7 +543,8 @@ process_section() {
 	uniq_count=$(printf '%s\n' "$emitted" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')
 	if [ "$line_count" != "$uniq_count" ]; then
 		rm -f "$out"
-		die "$name: coverage failure -- a config key was emitted more than once"
+		section_skip "$name" "coverage failure -- a config key was emitted more than once"
+		return 1
 	fi
 	emitted=$(printf '%s\n' "$emitted" | sed '/^$/d' | sort -u)
 	if [ "$expected" != "$emitted" ]; then
@@ -483,7 +558,8 @@ process_section() {
 				"$(comm -13 "$WORK/cov.expected" "$WORK/cov.emitted" | tr '\n' ' ')"
 		} >&2
 		rm -f "$out"
-		exit 1
+		section_skip "$name" "coverage mismatch (see above)"
+		return 1
 	fi
 
 	# Publish.

@@ -183,14 +183,21 @@ status_instance_json() {
 	local inst="$1"
 	local logdir="${CAKE_AUTORATE_LOG_DIR:-/var/log}"
 	local rundir="${CAKE_AUTORATE_RUN_DIR:-/var/run/cake-autorate}"
+	local cfgdir="${CAKE_AUTORATE_CONFIG_PREFIX:-/etc/cake-autorate}"
 	local log="$logdir/cake-autorate.$inst.log"
+	local cfg="$cfgdir/config.$inst.sh"
 	local line parsed run_json body
 
-	# Best-effort run state (device-only; run_path exists only while running).
+	# Best-effort run state (device-only; the run dir exists only while running).
 	run_json='"running":false'
 	if [ -d "$rundir/$inst" ]; then
+		# Uptime is measured from the generated config's mtime, which the bridge
+		# writes once per start/reload and never touches during operation -- a
+		# stable "running since last apply" basis. The run-dir mtime was used
+		# before but it advances whenever the daemon adds/removes state files
+		# under it, making the uptime jump erratically on each poll.
 		local mt now up
-		mt=$(stat -c %Y "$rundir/$inst" 2>/dev/null || echo '')
+		mt=$(stat -c %Y "$cfg" 2>/dev/null || echo '')
 		now=$(date +%s 2>/dev/null || echo '')
 		if [ -n "$mt" ] && [ -n "$now" ] && [ "$now" -ge "$mt" ]; then
 			up=$((now - mt))

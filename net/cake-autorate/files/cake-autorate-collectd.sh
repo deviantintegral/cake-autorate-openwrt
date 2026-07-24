@@ -32,10 +32,12 @@
 #
 # EXPORTED METRICS (reusing stock collectd types so no custom types.db /
 # TypesDB wiring is required -- avoids a fragile deployment dependency):
-#   bitrate-dl_achieved  bitrate-ul_achieved   achieved rate per direction (kbit/s)
-#   bitrate-dl_shaper    bitrate-ul_shaper      CAKE shaper rate per direction (kbit/s)
-#   delay-dl_owd_delta   delay-ul_owd_delta     avg one-way-delay delta per direction (us)
-#   gauge-dl_load        gauge-ul_load          load/bufferbloat state (see mapping)
+#   bitrate-dl_achieved     bitrate-ul_achieved     achieved rate/direction (kbit/s)
+#   bitrate-dl_shaper       bitrate-ul_shaper        CAKE shaper rate/direction (kbit/s)
+#   gauge-dl_owd_delta_us   gauge-ul_owd_delta_us    avg OWD delta/direction (us)
+#   gauge-dl_load           gauge-ul_load            load/bufferbloat state (see mapping)
+# OWD delta uses the UNBOUNDED `gauge` type (not `delay`, which clamps to +/-1e6
+# and would drop severe-bufferbloat samples).
 #
 # LOAD-CONDITION STRING -> NUMERIC GAUGE MAPPING:
 #     dl_idle / ul_idle  -> 0   (connection idle)
@@ -97,8 +99,12 @@ emit_metrics() {
 		{
 			put("bitrate-dl_achieved", $4)
 			put("bitrate-ul_achieved", $5)
-			put("delay-dl_owd_delta",  $8)
-			put("delay-ul_owd_delta",  $9)
+			# OWD delta uses the UNBOUNDED gauge type, not delay: the stock
+			# collectd delay type clamps to +/-1e6, which would silently drop
+			# severe-bufferbloat samples above 1,000,000 us -- exactly when the
+			# graph matters most. gauge is U:U so the spike is recorded.
+			put("gauge-dl_owd_delta_us", $8)
+			put("gauge-ul_owd_delta_us", $9)
 			put("gauge-dl_load",       loadnum($10))
 			put("gauge-ul_load",       loadnum($11))
 			put("bitrate-dl_shaper",   $12)
@@ -115,9 +121,14 @@ process_file() {
 	inst=$(instance_id_from_path "$logf")
 	[ -n "$inst" ] || return 0
 
-	line=$(grep '^SUMMARY; ' "$logf" 2>/dev/null | tail -n 1)
+	# Only the NEWEST SUMMARY is reported, and SUMMARY lines are frequent (one per
+	# processed ping response), so bound the read with `tail` first instead of
+	# grepping the whole file -- the log is clamped up to 100 MB and this runs
+	# every interval as `nobody` on a possibly low-power router. Mirrors the
+	# bounded read the rpcd status path uses on the same log.
+	line=$(tail -n 1000 "$logf" 2>/dev/null | grep '^SUMMARY; ' | tail -n 1)
 	if [ -z "$line" ] && [ -f "$logf.old" ]; then
-		line=$(grep '^SUMMARY; ' "$logf.old" 2>/dev/null | tail -n 1)
+		line=$(tail -n 1000 "$logf.old" 2>/dev/null | grep '^SUMMARY; ' | tail -n 1)
 	fi
 	[ -n "$line" ] || return 0
 

@@ -84,8 +84,11 @@ start_service() {
 	config_load cake-autorate
 
 	# Whole-world sync + prune of every instance config from live UCI. Abort the
-	# (re)start on failure so instances never launch against a stale/partial config.
-	if ! "$CA_BRIDGE"; then
+	# (re)start on failure so instances never launch against a stale/partial
+	# config. Pass CA_CONFIG_PREFIX explicitly so the bridge writes to exactly the
+	# directory start_instance reads config.<name>.sh from -- otherwise a
+	# non-default prefix would desync generation from lookup.
+	if ! CAKE_AUTORATE_CONFIG_PREFIX="$CA_CONFIG_PREFIX" "$CA_BRIDGE"; then
 		logger -t cake-autorate -p daemon.err \
 			"config bridge ($CA_BRIDGE) failed; refusing to (re)start instances"
 		return 1

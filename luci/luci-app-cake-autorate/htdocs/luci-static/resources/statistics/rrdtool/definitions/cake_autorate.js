@@ -20,7 +20,7 @@
  * Metrics (stock collectd types, so no custom types.db is required):
  *   bitrate-dl_achieved / bitrate-ul_achieved   achieved rate/direction (kbit/s)
  *   bitrate-dl_shaper   / bitrate-ul_shaper      CAKE shaper rate/direction (kbit/s)
- *   delay-dl_owd_delta  / delay-ul_owd_delta     avg one-way-delay delta (us)
+ *   gauge-dl_owd_delta_us / gauge-ul_owd_delta_us  avg one-way-delay delta (us, unbounded)
  *   gauge-dl_load       / gauge-ul_load          load/bufferbloat state (0/1/2, +10 = bufferbloat)
  */
 
@@ -86,16 +86,16 @@ return baseclass.extend({
 
 			data: {
 				instances: {
-					delay: [ "dl_owd_delta", "ul_owd_delta" ]
+					gauge: [ "dl_owd_delta_us", "ul_owd_delta_us" ]
 				},
 
 				options: {
-					delay_dl_owd_delta: {
+					gauge_dl_owd_delta_us: {
 						color: "00b000",
 						title: "OWD delta (DL)",
 						overlay: true
 					},
-					delay_ul_owd_delta: {
+					gauge_ul_owd_delta_us: {
 						color: "b000b0",
 						title: "OWD delta (UL)",
 						flip: true,

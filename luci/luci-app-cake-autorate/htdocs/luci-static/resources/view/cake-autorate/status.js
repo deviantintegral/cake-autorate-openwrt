@@ -76,17 +76,36 @@ function fmtStr(v) {
 	return (v == null || v === '') ? '—' : String(v);
 }
 
+var REASON_TEXT = {
+	'no-log': _('The service has no log file yet — it is stopped or has not started.'),
+	'no-data': _('The daemon is running but has not emitted a SUMMARY line yet — waiting for the first sample.')
+};
+
+/*
+ * fieldText(row, field) -- the single source of truth for what a data-live cell
+ * displays, used by BOTH the initial card build and the in-place poll update so
+ * the two can never diverge.
+ */
+function fieldText(row, field) {
+	switch (field) {
+		case 'running':   return row.running ? _('running') : _('stopped');
+		case 'uptime_s':  return live.formatUptime(row.uptime_s);
+		case 'datetime':  return fmtStr(row.datetime);
+		case 'available': return row.running ? _('No data yet') : _('Stopped');
+		case 'reason':    return REASON_TEXT[row.reason] || _('No live data available.');
+		default:
+			return (field.indexOf('load_condition') !== -1)
+				? fmtStr(row[field]) : fmtNum(row[field]);
+	}
+}
+
+function runBadgeClass(row) {
+	return 'cake-live cake-badge ' + (row.running ? 'cake-badge-up' : 'cake-badge-down');
+}
+
 function runBadge(row) {
-	var text, cls;
-	if (row.running) {
-		text = _('running');
-		cls = 'cake-badge cake-badge-up';
-	}
-	else {
-		text = _('stopped');
-		cls = 'cake-badge cake-badge-down';
-	}
-	return liveCell('span', 'running', row.instance, text, { 'class': 'cake-live ' + cls });
+	return liveCell('span', 'running', row.instance, fieldText(row, 'running'),
+		{ 'class': runBadgeClass(row) });
 }
 
 /* The metric grid for one instance (DL/UL columns). */
@@ -101,13 +120,10 @@ function metricTable(row) {
 
 	live.STATUS_FIELDS.forEach(function (f) {
 		var label = f.unit ? (_(f.label) + ' (' + f.unit + ')') : _(f.label);
-		var dlVal = row[f.dl];
-		var ulVal = row[f.ul];
-		var fmt = (f.dl.indexOf('load_condition') !== -1) ? fmtStr : fmtNum;
 		rows.push(E('tr', {}, [
 			E('td', { 'class': 'cake-metric-label' }, label),
-			E('td', {}, liveCell('span', f.dl, row.instance, fmt(dlVal))),
-			E('td', {}, liveCell('span', f.ul, row.instance, fmt(ulVal)))
+			E('td', {}, liveCell('span', f.dl, row.instance, fieldText(row, f.dl))),
+			E('td', {}, liveCell('span', f.ul, row.instance, fieldText(row, f.ul)))
 		]));
 	});
 
@@ -117,23 +133,16 @@ function metricTable(row) {
 /* One instance card: header (name + run badge + uptime), controls, and either
  * the metric grid or an "unavailable" notice. */
 function instanceCard(row, onService) {
-	var reasonText = {
-		'no-log': _('The service has no log file yet — it is stopped or has not started.'),
-		'no-data': _('The daemon is running but has not emitted a SUMMARY line yet — waiting for the first sample.')
-	};
-
 	var body;
 	if (row.available) {
 		body = metricTable(row);
 	}
 	else {
 		body = E('div', { 'class': 'cake-unavailable' }, [
-			liveCell('span', 'available', row.instance,
-				row.running ? _('No data yet') : _('Stopped'),
+			liveCell('span', 'available', row.instance, fieldText(row, 'available'),
 				{ 'class': 'cake-live cake-nodata' }),
 			' — ',
-			liveCell('span', 'reason', row.instance,
-				reasonText[row.reason] || _('No live data available.'))
+			liveCell('span', 'reason', row.instance, fieldText(row, 'reason'))
 		]);
 	}
 
@@ -144,11 +153,11 @@ function instanceCard(row, onService) {
 			' ',
 			E('span', {}, [
 				_('Uptime') + ': ',
-				liveCell('span', 'uptime_s', row.instance, live.formatUptime(row.uptime_s))
+				liveCell('span', 'uptime_s', row.instance, fieldText(row, 'uptime_s'))
 			]),
 			E('span', { 'class': 'cake-lastupdate' }, [
 				' · ' + _('Last update') + ': ',
-				liveCell('span', 'datetime', row.instance, fmtStr(row.datetime))
+				liveCell('span', 'datetime', row.instance, fieldText(row, 'datetime'))
 			])
 		])
 	]);
@@ -180,10 +189,43 @@ return view.extend({
 		/* Body container that the poll refreshes in place. */
 		var bodyEl = E('div', { 'id': 'cake-autorate-status-body' });
 
+		/* Structure depends only on the instance set and each instance's
+		 * availability (available => metric table, unavailable => notice);
+		 * running state and all values are updated in place. */
+		var lastSig = null;
+		function structuralSig(rows) {
+			if (!rows.length)
+				return 'empty';
+			return rows.map(function (r) {
+				return r.instance + ':' + (r.available ? 'a' : 'u');
+			}).join('|');
+		}
+
+		/* Update just the data-live cells for an unchanged structure, preserving
+		 * text selection / focus and avoiding a full DOM rebuild every 3s. */
+		function updateInPlace(rows) {
+			rows.forEach(function (row) {
+				var sel = '[data-live="1"][data-instance="' + row.instance + '"]';
+				bodyEl.querySelectorAll(sel).forEach(function (c) {
+					var f = c.getAttribute('data-field');
+					c.textContent = fieldText(row, f);
+					if (f === 'running')
+						c.className = runBadgeClass(row);
+				});
+			});
+		}
+
 		function renderRows(resp) {
 			var rows = live.statusRows(resp);
-			var nodes = [];
+			var sig = structuralSig(rows);
 
+			if (sig === lastSig && sig !== 'empty') {
+				updateInPlace(rows);
+				return;
+			}
+			lastSig = sig;
+
+			var nodes = [];
 			if (!rows.length) {
 				nodes.push(E('div', { 'class': 'cbi-section' }, [
 					E('p', {}, _('No enabled cake-autorate instances. Enable an instance on the Configuration tab, then Start it below.'))
@@ -200,6 +242,10 @@ return view.extend({
 
 		function refresh() {
 			return callStatus(null).then(renderRows).catch(function (e) {
+				// Replace the whole body with the error, and forget the last
+				// structure so the next successful poll does a full rebuild rather
+				// than trying an in-place update against the error DOM.
+				lastSig = null;
 				bodyEl.replaceChildren(E('div', { 'class': 'alert-message warning' },
 					_('Could not read status: %s').format(e && e.message ? e.message : e)));
 			});

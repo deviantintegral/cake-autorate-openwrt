@@ -178,28 +178,53 @@ grep -q '^base_dl_shaper_rate_kbps=20000$' "$tmp/edge.sh" && ok "rate '20mbit' -
 
 # ------------------------------------------------------------------ check 6
 echo
-echo "== 6. invalid inputs are fatal"
+echo "== 6. invalid inputs SKIP the instance (resilient: never emit a bad value,"
+echo "      never abort the whole run so other instances keep working)"
 mk_bad() { printf "config cake-autorate 'bad'\n\toption enabled '1'\n\toption dl_if 'x'\n\toption ul_if 'y'\n%b\n" "$1" > "$tmp/bad.uci"; }
 
-mk_bad "\toption no_pingers '6.5'"
-if run_bridge --uci-file "$tmp/bad.uci" --instance bad --stdout >/dev/null 2>"$tmp/e"; then
-	fail "non-integral integer 6.5 was accepted"
-else ok "non-integral integer 6.5 is fatal"; fi
+# A bad value must produce NO config (the instance is skipped), the bridge must
+# still exit 0, and a skip warning must reach stderr.
+assert_skipped() {  # <label> <uci-file>
+	_out=$(run_bridge --uci-file "$2" --instance bad --stdout 2>"$tmp/e"); _rc=$?
+	if [ "$_rc" -eq 0 ] && [ -z "$_out" ] && grep -qi 'skip' "$tmp/e"; then
+		ok "$1 -> instance skipped, no config emitted, bridge exit 0"
+	else
+		fail "$1 -> rc=$_rc, output='$_out' (expected empty output + skip + exit 0)"
+	fi
+}
 
-mk_bad "\toption min_dl_shaper_rate_kbps '-5000'"
-if run_bridge --uci-file "$tmp/bad.uci" --instance bad --stdout >/dev/null 2>"$tmp/e"; then
-	fail "negative value was accepted"
-else ok "negative value is fatal"; fi
-
+mk_bad "\toption no_pingers '6.5'";              assert_skipped "non-integral integer 6.5" "$tmp/bad.uci"
+mk_bad "\toption min_dl_shaper_rate_kbps '-5000'"; assert_skipped "negative value" "$tmp/bad.uci"
 printf "config cake-autorate 'bad'\n\toption enabled '1'\n\toption dl_if ''\n\toption ul_if 'y'\n" > "$tmp/bad.uci"
-if run_bridge --uci-file "$tmp/bad.uci" --instance bad --stdout >/dev/null 2>"$tmp/e"; then
-	fail "empty dl_if (non-empty-default string) was accepted"
-else ok "empty dl_if is fatal"; fi
-
+assert_skipped "empty dl_if (non-empty-default string)" "$tmp/bad.uci"
 printf "config cake-autorate 'bad'\n\toption enabled '1'\n\toption dl_if 'x'\n\toption ul_if 'y'\n\toption bogus_key '1'\n" > "$tmp/bad.uci"
-if run_bridge --uci-file "$tmp/bad.uci" --instance bad --stdout >/dev/null 2>"$tmp/e"; then
-	fail "unknown UCI key was accepted"
-else ok "unknown UCI key is fatal (would kill the daemon)"; fi
+assert_skipped "unknown UCI key (would kill the daemon if emitted)" "$tmp/bad.uci"
+
+# A malformed `enabled` value must be treated as disabled (skipped), NOT abort.
+printf "config cake-autorate 'bad'\n\toption enabled 'ture'\n\toption dl_if 'x'\n\toption ul_if 'y'\n" > "$tmp/bad.uci"
+_out=$(run_bridge --uci-file "$tmp/bad.uci" 2>"$tmp/e"); _rc=$?
+if [ "$_rc" -eq 0 ]; then ok "malformed enabled -> treated as disabled, exit 0"
+else fail "malformed enabled -> rc=$_rc (expected 0)"; fi
+
+# RESILIENCE: one bad instance must NOT stop a second, valid instance.
+printf "config cake-autorate 'good'\n\toption enabled '1'\n\toption dl_if 'ifb4eth0'\n\toption ul_if 'eth0'\n\toption min_dl_shaper_rate_kbps '2000'\nconfig cake-autorate 'broken'\n\toption enabled '1'\n\toption dl_if 'ifb4eth1'\n\toption ul_if 'eth1'\n\toption no_pingers '6.5'\n" > "$tmp/mixed.uci"
+_cfgdir=$(mktemp -d)
+run_bridge --uci-file "$tmp/mixed.uci" --config-dir "$_cfgdir" >"$tmp/e" 2>&1; _rc=$?
+if [ "$_rc" -eq 0 ] && [ -f "$_cfgdir/config.good.sh" ] && [ ! -f "$_cfgdir/config.broken.sh" ]; then
+	ok "one broken instance is skipped; the valid instance is still generated"
+else
+	fail "resilience broke: rc=$_rc good=$([ -f "$_cfgdir/config.good.sh" ] && echo y || echo n) broken=$([ -f "$_cfgdir/config.broken.sh" ] && echo y || echo n)"
+fi
+rm -rf "$_cfgdir"
+
+# An all-invalid reflector list drops the option (daemon defaults), keeps the instance.
+printf "config cake-autorate 'refl'\n\toption enabled '1'\n\toption dl_if 'x'\n\toption ul_if 'y'\n\tlist reflectors 'one.one.one.one'\n\tlist reflectors 'not-an-ip'\n" > "$tmp/refl.uci"
+_out=$(run_bridge --uci-file "$tmp/refl.uci" --instance refl --stdout 2>"$tmp/e"); _rc=$?
+if [ "$_rc" -eq 0 ] && [ -n "$_out" ] && ! printf '%s' "$_out" | grep -q '^reflectors=('; then
+	ok "all-invalid reflectors -> option dropped, instance still generated (daemon defaults)"
+else
+	fail "reflector fallback broke: rc=$_rc has_reflectors=$(printf '%s' "$_out" | grep -c '^reflectors=(')"
+fi
 
 # ------------------------------------------------------------------ check 7
 echo
@@ -313,28 +338,26 @@ awk -v a="$anchor" '
 	index($0, a) && !done { print "\tprintf \"stray_key=1\\n\" >> \"$out\""; done=1 }
 	{ print }
 ' "$BRIDGE" > "$tmp/mut_stray.sh"
-if sh "$tmp/mut_stray.sh" --uci-file "$FIXTURE" --instance wan_dsl --stdout >/dev/null 2>"$tmp/e11a"; then
-	fail "mutant emitting a stray key was NOT caught by the coverage assertion"
+# A mutated bridge must still have its coverage assertion FIRE (diagnostic on
+# stderr) and the affected instance must be SKIPPED (no --stdout output), rather
+# than silently emitting a daemon-fatal/incomplete config. The bridge exits 0
+# (resilient) but generates nothing for the bad instance.
+_out=$(sh "$tmp/mut_stray.sh" --uci-file "$FIXTURE" --instance wan_dsl --stdout 2>"$tmp/e11a"); _rc=$?
+if [ "$_rc" -eq 0 ] && [ -z "$_out" ] && { grep -q 'only emitted' "$tmp/e11a" || grep -qi 'coverage' "$tmp/e11a"; }; then
+	ok "stray extra key -> coverage fires, instance skipped (daemon-fatal key blocked)"
 else
-	if grep -q 'only emitted' "$tmp/e11a" || grep -qi 'coverage' "$tmp/e11a"; then
-		ok "stray extra key -> coverage assertion fails (daemon-fatal key blocked)"
-	else
-		fail "mutant failed but not via the coverage assertion:"; sed 's/^/     /' "$tmp/e11a"
-	fi
+	fail "stray-key mutant not handled: rc=$_rc out='$_out'"; sed 's/^/     /' "$tmp/e11a"
 fi
 # 11b: mutant that drops a key
 awk -v a="$anchor" '
 	index($0, a) && !done { print "\tsed -i \"/^debug=/d\" \"$out\""; done=1 }
 	{ print }
 ' "$BRIDGE" > "$tmp/mut_drop.sh"
-if sh "$tmp/mut_drop.sh" --uci-file "$FIXTURE" --instance wan_dsl --stdout >/dev/null 2>"$tmp/e11b"; then
-	fail "mutant dropping a key was NOT caught by the coverage assertion"
+_out=$(sh "$tmp/mut_drop.sh" --uci-file "$FIXTURE" --instance wan_dsl --stdout 2>"$tmp/e11b"); _rc=$?
+if [ "$_rc" -eq 0 ] && [ -z "$_out" ] && { grep -q 'only in UCI' "$tmp/e11b" || grep -qi 'coverage' "$tmp/e11b"; }; then
+	ok "dropped key -> coverage fires, instance skipped (silent drop blocked)"
 else
-	if grep -q 'only in UCI' "$tmp/e11b" || grep -qi 'coverage' "$tmp/e11b"; then
-		ok "dropped key -> coverage assertion fails (silent drop blocked)"
-	else
-		fail "mutant failed but not via the coverage assertion:"; sed 's/^/     /' "$tmp/e11b"
-	fi
+	fail "drop-key mutant not handled: rc=$_rc out='$_out'"; sed 's/^/     /' "$tmp/e11b"
 fi
 # 11c: unmutated bridge passes coverage cleanly (control)
 if run_bridge --uci-file "$FIXTURE" --instance wan_dsl --stdout >/dev/null 2>"$tmp/e11c"; then
