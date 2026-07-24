@@ -3,12 +3,33 @@
 		"title": "CAKE Autorate",
 		"order": 60,
 		"action": {
-			"type": "view",
-			"path": "cake-autorate/overview"
+			"type": "firstchild"
 		},
 		"depends": {
 			"acl": [ "luci-app-cake-autorate" ],
 			"uci": { "cake-autorate": true }
+		}
+	},
+	"admin/services/cake-autorate/overview": {
+		"title": "Configuration",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "cake-autorate/overview"
+		},
+		"depends": {
+			"acl": [ "luci-app-cake-autorate" ]
+		}
+	},
+	"admin/services/cake-autorate/status": {
+		"title": "Status",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "cake-autorate/status"
+		},
+		"depends": {
+			"acl": [ "luci-app-cake-autorate" ]
 		}
 	}
 }

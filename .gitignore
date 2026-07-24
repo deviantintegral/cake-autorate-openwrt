@@ -17,3 +17,8 @@ node_modules/
 .pkgdir/
 ipkg-*/
 apk-*/
+
+# tests/integration harness artifacts + cached images (never commit)
+/tests/integration/artifacts/
+__pycache__/
+*.pyc

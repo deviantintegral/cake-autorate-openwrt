@@ -2,7 +2,7 @@
 id: 10
 group: "testing"
 dependencies: [5, 6]
-status: "pending"
+status: "completed"
 created: 2026-07-23
 skills:
   - shell

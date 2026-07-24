@@ -397,10 +397,16 @@ The graph is acyclic: every dependency edge points from a lower task ID to a hig
 
 **Phase 4 outcome (verified):** procd init runs one supervised daemon per enabled UCI section (bridge-first with abort-on-failure, reload reconciles cold-start/disable/change, START=97 after sqm's 50, never touches tc). Statistics use a collectd **exec** reader (tail was insufficient — string load-condition→numeric gauge mapping and per-instance labeling from the log filename) exporting shaper/achieved/OWD/load metrics under stock collectd types, with a `luci-app-statistics` graph def; 18/18 parser tests. rpcd backend exposes `sqm_interfaces` (SQM-derived egress + `ifb4*` ingress with mismatch flag), `status` (per-instance, parsed from the shared SUMMARY contract), and `service` (allowlisted actions) — hardened input validation (`[A-Za-z0-9_]+` instance names, action allowlist, bounded log tail never sourced); ACL grants split ubus read/write; 66/66 tests. Init 17/17. All shellcheck-clean. Verified: both packages compile (exit 0) and the apk ships the init, rpcd, collectd exec reader, and collectd conf; task-6 and task-8 Makefile stanzas coexist cleanly. _(Agents 005/008 suspended on an accidental full-dependency build; the orchestrator completed the SDK-build verification and confirmed all deliverables.)_
 
-### Phase 5: Live UI and VM Integration
+### ✅ Phase 5: Live UI and VM Integration
 **Parallel Tasks:**
-- Task 009: LuCI status view and SQM-validated interface selection (depends on: 007, 008)
-- Task 010: VM integration test harness with induced load (depends on: 005, 006)
+- ✔️ Task 009: LuCI status view and SQM-validated interface selection (depends on: 007, 008) — `completed`
+- ✔️ Task 010: VM integration test harness with induced load (depends on: 005, 006) — `completed`
+
+**Phase 5 outcome (verified):** LuCI status view (`status.js` + `live.js`) polls the rpcd `status` method every 3s, rendering per-instance shaped-vs-achieved rates, load, OWD deltas, run state and uptime, with global + per-instance Start/Stop/Restart; all log-derived values render via `E()`/text (no XSS). `overview.js` now derives/validates `dl_if`/`ul_if` from the SQM-derived `sqm_interfaces` with a non-blocking mismatch warning. Dynamic cells are marked `[data-live="1"]`/`data-field` for task-12 masking and task-11 assertion. 17 (live) + 13 (coverage) JS unit tests pass; both packages compile.
+
+The **VM integration harness** (`tests/integration/run.sh` + Python vmdriver/harness) booted a real **pinned 25.12.5** VM under QEMU/KVM and passed **18/18 assertions live** with captured evidence: two procd instances (PIDs), **observed shaping** (base 3000k → 60000k under load, decay to 46192k), distinct per-instance logs, populated rpcd status, collectd RRDs under `cake_autorate-<instance>/`, and clean `apk del`. A `--negative` mode (12/18) proves the assertions have teeth; a `no KVM` path emits `INTEGRATION_SKIPPED` (exit 0) for CI. Artifacts are gitignored.
+
+**⚠ Two real on-device defects surfaced by the live run and FIXED** (commit `74eb178`): the bridge (task 004) and rpcd (task 008) ran `set -u` then sourced OpenWrt's non-nounset-clean `/lib/functions.sh`, aborting the **actual on-device libuci path** — the bridge generated no config and the service refused to start. Off-device unit tests had missed this (they use the `--uci-file`/override paths). Fixed with `set +u` around the libuci block in both; added `tests/regression/test-libuci-nounset.sh` (drives the real libuci path under a nounset-hostile stub; 4/4, has teeth). The harness had validated the identical one-line fix in-VM (18/18), so a full re-run was not repeated here — CI (task 013) re-runs the harness against the fixed apks.
 
 ### Phase 6: Browser Test Suites
 **Parallel Tasks:**
