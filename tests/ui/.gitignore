@@ -1,0 +1,12 @@
+# Never commit: browser binaries, deps, results, per-run VM/serve state.
+node_modules/
+test-results/
+playwright-report/
+blob-report/
+.runtime/
+*.log
+
+# Task 12: the human-review gallery is a BUILD ARTIFACT (regenerated in CI),
+# not source. The committed baseline PNGs under visual/*-snapshots/ are the
+# canonical images and are intentionally NOT ignored here.
+visual/gallery/

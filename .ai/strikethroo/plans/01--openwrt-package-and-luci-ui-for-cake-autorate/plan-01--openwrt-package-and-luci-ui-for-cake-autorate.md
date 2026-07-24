@@ -408,10 +408,12 @@ The **VM integration harness** (`tests/integration/run.sh` + Python vmdriver/har
 
 **⚠ Two real on-device defects surfaced by the live run and FIXED** (commit `74eb178`): the bridge (task 004) and rpcd (task 008) ran `set -u` then sourced OpenWrt's non-nounset-clean `/lib/functions.sh`, aborting the **actual on-device libuci path** — the bridge generated no config and the service refused to start. Off-device unit tests had missed this (they use the `--uci-file`/override paths). Fixed with `set +u` around the libuci block in both; added `tests/regression/test-libuci-nounset.sh` (drives the real libuci path under a nounset-hostile stub; 4/4, has teeth). The harness had validated the identical one-line fix in-VM (18/18), so a full re-run was not repeated here — CI (task 013) re-runs the harness against the fixed apks.
 
-### Phase 6: Browser Test Suites
-**Parallel Tasks:**
-- Task 011: Playwright functional UI tests (depends on: 007, 009)
-- Task 012: Playwright visual-regression and human-review gallery (depends on: 007, 009)
+### ✅ Phase 6: Browser Test Suites
+**Tasks (serialized — shared Playwright harness):**
+- ✔️ Task 011: Playwright functional UI tests (depends on: 007, 009) — `completed`
+- ✔️ Task 012: Playwright visual-regression and human-review gallery (depends on: 007, 009) — `completed`
+
+**Phase 6 outcome (verified live):** A shared Playwright harness (`tests/ui/`) brings up real LuCI via a new opt-in `tests/integration/run.sh --serve` mode (boots the pinned 25.12.5 VM, installs the apks, configures two instances, forwards guest :80→host :8080; `globalSetup`/`globalTeardown`). **Functional suite: 6/6 specs pass live** (config groups + search, instance CRUD, essentials-only, status populates, Start/Stop/Restart). **Visual suite: 5/5 specs pass live against 12 committed baselines** (status view + config: empty, single, multi, post-Save&Apply, 7 group tabs) with all `[data-live="1"]` dynamic cells masked (pinned chromium + 1280×900 viewport); a browsable human-review gallery (`generate-gallery.js` → `index.html`) is always published as a CI artifact. Independently re-verified by the orchestrator: fresh `--update-snapshots` then a fresh no-update run passing 5/5, plus all 6 functional. node_modules/browsers/test-results/gallery gitignored; 12 baseline PNGs committed. _(A test-code defect — the empty-config and post-Save&Apply specs hung waiting for option rows absent in an empty config — was fixed by waiting on the always-present toolbar; the functional run also independently confirmed the libuci fix works end-to-end.)_
 
 ### Phase 7: Continuous Integration
 **Parallel Tasks:**

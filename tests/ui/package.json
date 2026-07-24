@@ -1,0 +1,17 @@
+{
+  "name": "cake-autorate-luci-ui-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright UI tests (functional + visual) for luci-app-cake-autorate, driven against a live LuCI booted by tests/integration in --serve mode.",
+  "scripts": {
+    "test": "playwright test",
+    "test:functional": "playwright test --project=functional",
+    "test:visual": "playwright test --project=visual",
+    "test:visual:update": "playwright test --project=visual --update-snapshots",
+    "gallery": "node visual/generate-gallery.js",
+    "install:browser": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}

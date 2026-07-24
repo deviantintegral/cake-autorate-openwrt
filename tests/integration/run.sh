@@ -33,7 +33,19 @@ IMG_SHA256="23e2538e8ab0eb52dfed1c65d608ecdb71ffd432dd54885da138ae67cd9e4461"  #
 APK_DIR="${CA_IT_APK_DIR:-/tmp/owrt-sdk/openwrt-sdk-${IMG_VER}-x86-64_gcc-14.3.0_musl.Linux-x86_64/bin/packages/x86_64/cakeautorate}"
 
 NEG=""
+SERVE=""
 [ "${1:-}" = "--negative" ] && NEG="--negative"
+# --serve: opt-in live-LuCI mode for the tests/ui Playwright suite. Boots +
+# installs + configures exactly like a positive run, then brings up LuCI and
+# STAYS UP (LuCI reachable on a forwarded host port) until a stop-file appears.
+# It does NOT run the PASS/FAIL assertion suite, so it cannot change run.sh's
+# normal verdict semantics. Controlled entirely by CA_UI_* env vars:
+#   CA_UI_SERVE_PORT     host port that forwards to guest :80  (default 8080)
+#   CA_UI_SERVE_HOST     host bind address                     (default 127.0.0.1)
+#   CA_UI_ROOT_PASSWORD  root password set for LuCI login      (default cakeautorate)
+#   CA_UI_READY_FILE     JSON file written when LuCI is live    (required)
+#   CA_UI_STOP_FILE      touch this file to shut the VM down    (required)
+[ "${1:-}" = "--serve" ] && SERVE="1"
 
 log() { printf '%s\n' "== $* ==" >&2; }
 
@@ -95,6 +107,27 @@ rm -f "$OVERLAY"
 qemu-img create -f qcow2 -b "$CACHE/$IMG_BASE" -F raw "$OVERLAY" 3G >/dev/null
 
 # ---- run the harness ------------------------------------------------------
+if [ -n "$SERVE" ]; then
+	SERVE_PORT="${CA_UI_SERVE_PORT:-8080}"
+	SERVE_HOST="${CA_UI_SERVE_HOST:-127.0.0.1}"
+	SERVE_PW="${CA_UI_ROOT_PASSWORD:-cakeautorate}"
+	READY="${CA_UI_READY_FILE:-$ART/serve-ready.json}"
+	STOP="${CA_UI_STOP_FILE:-$ART/serve-stop}"
+	rm -f "$READY" "$STOP"
+	log "running harness (SERVE) -> LuCI at http://$SERVE_HOST:$SERVE_PORT/"
+	set +e
+	python3 "$HERE/lib/harness.py" \
+		--overlay "$OVERLAY" --seed "$SEED" --artifacts "$ART" \
+		--mem "$MEM" --serve \
+		--serve-host "$SERVE_HOST" --serve-port "$SERVE_PORT" \
+		--root-password "$SERVE_PW" \
+		--serve-ready-file "$READY" --serve-stop-file "$STOP"
+	RC=$?
+	set -e
+	echo "artifacts: $ART"
+	exit $RC
+fi
+
 log "running harness${NEG:+ (NEGATIVE)}"
 set +e
 python3 "$HERE/lib/harness.py" \

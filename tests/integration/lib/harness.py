@@ -96,8 +96,16 @@ class Harness:
         self.vm = VM(self.args.overlay, self.art, mem=self.args.mem, nics=2,
                      log=self.logf)
         # net0 -> eth0 -> wan2 on 10.0.3.0/24 ; net1 -> eth1 -> wan (default).
-        self.vm.start(nic_extra=["net=10.0.3.0/24",
-                                  None],
+        # In --serve mode also expose the guest's uhttpd (LuCI, guest :80) on a
+        # host port via QEMU user-mode hostfwd, so a host browser (Playwright,
+        # tests/ui) can reach LuCI at http://<host>:<port>/. The default guest
+        # address on net0 (net=10.0.3.0/24) is 10.0.3.15, which is where uhttpd
+        # (bound to 0.0.0.0:80) answers. Purely additive: WAN/serial are untouched.
+        nic0 = "net=10.0.3.0/24"
+        if getattr(self.args, "serve", False):
+            nic0 += ",hostfwd=tcp:%s:%d-:80" % (self.args.serve_host,
+                                                self.args.serve_port)
+        self.vm.start(nic_extra=[nic0, None],
                       extra_qemu_args=[
                           "-drive",
                           "file=%s,format=raw,if=virtio" % self.args.seed])
@@ -426,6 +434,183 @@ class Harness:
                      "LEFT:" not in leftover, leftover.replace("\n", " "))
 
     # ------------------------------------------------------------------
+    # SERVE MODE (opt-in, for tests/ui Playwright). Boots + installs + configures
+    # exactly like a positive run, then brings up LuCI (uhttpd + a known root
+    # password) and STAYS UP with LuCI reachable on the forwarded host port until
+    # a stop-file appears or a signal arrives. Emits a JSON "ready" file with the
+    # base URL + credentials. Never runs the load/shaping assertions -- it is a
+    # live endpoint, not a PASS/FAIL gate, so it MUST NOT change run.sh's verdict.
+    # ------------------------------------------------------------------
+    def host_http_probe(self, path="/", timeout=5):
+        """Probe the forwarded LuCI port FROM THE HOST (the definitive check --
+        this is exactly what the browser reaches). Returns (status_or_None, body).
+        Follows redirects so an http->/cgi-bin/luci/ 302 still resolves."""
+        import urllib.request
+        import urllib.error
+        url = "http://%s:%d%s" % (self.args.serve_host, self.args.serve_port, path)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "ca-harness"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read(2000).decode(errors="replace")
+                return resp.getcode(), body
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read(2000).decode(errors="replace")
+            except Exception:
+                body = ""
+            return e.code, body
+        except Exception as e:  # connection refused / reset / timeout
+            return None, str(e)
+
+    def enable_luci(self):
+        self.log("== bringing up LuCI (uhttpd + root password) ==")
+        pw = self.args.root_password
+        # Set a known root password so LuCI's rpcd login accepts it (the stock
+        # image ships an empty password; LuCI still needs one to authenticate).
+        self.g("(echo '%s'; echo '%s') | passwd root >/dev/null 2>&1; echo pw-set" % (pw, pw))
+        # The two-WAN test topology (network-two-wan.sh) deletes LAN and puts both
+        # NICs in the firewall 'wan' zone, which DROPS inbound HTTP. The forwarded
+        # LuCI port arrives via that zone, so LuCI is unreachable until we open it.
+        # Open 80/443 for the test AND stop the firewall (disposable VM) so the
+        # browser can always reach uhttpd.
+        self.g("uci -q delete firewall.luci_serve; "
+               "uci set firewall.luci_serve=rule; "
+               "uci set firewall.luci_serve.name='Allow-LuCI-serve'; "
+               "uci set firewall.luci_serve.src='wan'; "
+               "uci set firewall.luci_serve.proto='tcp'; "
+               "uci set firewall.luci_serve.dest_port='80 443'; "
+               "uci set firewall.luci_serve.target='ACCEPT'; "
+               "uci commit firewall; "
+               "/etc/init.d/firewall stop 2>/dev/null; echo fw-opened")
+        # uhttpd + the LuCI web UI must be present for the admin views; install
+        # whatever is missing (base release images do not always bundle LuCI).
+        rc, have = self.g("[ -x /etc/init.d/uhttpd ] && echo UHAVE || echo UMISS; "
+                          "[ -e /www/cgi-bin/luci ] && echo LHAVE || echo LMISS")
+        if "UMISS" in have or "LMISS" in have:
+            self.log("installing LuCI/uhttpd (missing: %s)" % have.replace("\n", " "))
+            self.g("apk add --allow-untrusted luci-base luci-mod-admin-full "
+                   "luci-theme-bootstrap uhttpd uhttpd-mod-ubus rpcd "
+                   "rpcd-mod-file rpcd-mod-luci 2>&1 | tail -8", t=400)
+        # Ensure the ubus/file rpcd bits LuCI's client needs are present too.
+        self.g("apk add --allow-untrusted uhttpd-mod-ubus rpcd-mod-file rpcd-mod-luci "
+               "2>&1 | tail -3 || true", t=200)
+        # rpcd carries the login/session backend + our file-object; reload it so
+        # the ACL for luci-app-cake-autorate and the cake-autorate object are live.
+        self.g("/etc/init.d/rpcd enable 2>/dev/null; /etc/init.d/rpcd restart 2>/dev/null; "
+               "/etc/init.d/uhttpd enable 2>/dev/null; /etc/init.d/uhttpd restart 2>&1 | tail -3; "
+               "sleep 2; echo uhttpd-up")
+        # Diagnostics captured once so a failure is debuggable from artifacts.
+        self.g("echo '# listeners:'; netstat -ltn 2>/dev/null | grep ':80' || ss -ltn 2>/dev/null | grep ':80'; "
+               "echo '# uhttpd cfg:'; uci show uhttpd 2>/dev/null | grep -E 'listen_http|redirect' ; "
+               "echo '# cgi:'; ls -l /www/cgi-bin/ 2>&1; "
+               "echo '# uhttpd log:'; logread 2>/dev/null | grep -i uhttpd | tail -5",
+               capture="serve-luci-diag.txt")
+        # Verify LuCI answers FROM THE HOST via the forwarded port (definitive).
+        ok = False
+        detail = ""
+        for _ in range(30):
+            code, body = self.host_http_probe("/cgi-bin/luci/")
+            if code in (200, 301, 302, 303, 403) or (body and "luci" in body.lower()):
+                ok = True
+                detail = "HTTP %s from host; body[:80]=%r" % (code, body[:80])
+                break
+            # also try root
+            code2, body2 = self.host_http_probe("/")
+            if code2 in (200, 301, 302, 303, 403):
+                ok = True
+                detail = "HTTP %s (root) from host" % code2
+                break
+            detail = "code=%s code2=%s err=%r" % (code, code2, str(body)[:80])
+            time.sleep(2)
+        self.A.check("serve: LuCI answers on the forwarded host port", ok, detail)
+        self.artifact("serve-luci-probe.txt", detail + "\n")
+        return ok
+
+    def write_ready(self):
+        import json
+        base = "http://%s:%d" % (self.args.serve_host, self.args.serve_port)
+        info = {
+            "available": True,
+            "base_url": base,
+            "luci_url": base + "/cgi-bin/luci/",
+            "overview_path": "/cgi-bin/luci/admin/services/cake-autorate/overview",
+            "status_path": "/cgi-bin/luci/admin/services/cake-autorate/status",
+            "username": "root",
+            "password": self.args.root_password,
+            "pid": os.getpid(),
+        }
+        path = self.args.serve_ready_file
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(info, f)
+        os.replace(tmp, path)
+        self.log("SERVE READY: %s (user=root pass=%s) -> %s"
+                 % (info["luci_url"], self.args.root_password, path))
+        print("SERVE_READY %s" % info["luci_url"], flush=True)
+
+    def serve_wait(self):
+        import signal
+        self._serve_stop = False
+
+        def _sig(*_a):
+            self._serve_stop = True
+        signal.signal(signal.SIGTERM, _sig)
+        signal.signal(signal.SIGINT, _sig)
+        stopf = self.args.serve_stop_file
+        self.log("== serving; waiting for stop-file %s or SIGTERM ==" % stopf)
+        last_keepalive = 0.0
+        deadline = time.time() + self.args.serve_max_seconds
+        while not self._serve_stop:
+            if stopf and os.path.exists(stopf):
+                self.log("stop-file observed; shutting down VM")
+                break
+            if time.time() > deadline:
+                self.log("serve max lifetime reached; shutting down VM")
+                break
+            now = time.time()
+            # Keepalive drains the serial console and confirms the guest is alive.
+            if now - last_keepalive > 15:
+                try:
+                    self.g("true", t=15)
+                except Exception:
+                    self.log("guest keepalive failed; shutting down")
+                    break
+                last_keepalive = now
+            time.sleep(1)
+
+    def run_serve(self):
+        rc = 1
+        try:
+            self.boot()
+            self.mount_seed()
+            if not self.wait_for_net():
+                raise VMError("guest has no internet; cannot apk install")
+            self.install()
+            self.configure_network_and_sqm()
+            self.configure_cake_autorate()
+            if self.enable_luci():
+                self.write_ready()
+                rc = 0
+                self.serve_wait()
+        except VMError as e:
+            self.log("SERVE ERROR (infrastructure): %s" % e)
+        except Exception as e:  # noqa
+            import traceback
+            self.log("SERVE ERROR: %r" % e)
+            self.logf.write(traceback.format_exc())
+        finally:
+            if self.vm:
+                self.vm.stop()
+            # Never leave a stale ready-file claiming a live endpoint.
+            try:
+                if rc != 0 and os.path.exists(self.args.serve_ready_file):
+                    os.unlink(self.args.serve_ready_file)
+            except OSError:
+                pass
+            self.logf.close()
+        return rc
+
+    # ------------------------------------------------------------------
     def run(self):
         try:
             self.boot()
@@ -487,7 +672,18 @@ def main():
     ap.add_argument("--load-window", type=int, default=44)
     ap.add_argument("--settle", type=int, default=25)
     ap.add_argument("--negative", action="store_true")
+    # --- serve mode (opt-in; live LuCI endpoint for tests/ui Playwright) -------
+    ap.add_argument("--serve", action="store_true",
+                    help="boot+install+configure, bring up LuCI, and stay up")
+    ap.add_argument("--serve-host", default="127.0.0.1")
+    ap.add_argument("--serve-port", type=int, default=8080)
+    ap.add_argument("--root-password", default="cakeautorate")
+    ap.add_argument("--serve-ready-file", default="")
+    ap.add_argument("--serve-stop-file", default="")
+    ap.add_argument("--serve-max-seconds", type=int, default=1800)
     args = ap.parse_args()
+    if args.serve:
+        sys.exit(Harness(args).run_serve())
     sys.exit(Harness(args).run())
 
 
