@@ -1,0 +1,79 @@
+# Canonical UCI <-> upstream option schema for cake-autorate 3.2.2.
+# Generated from defaults.sh at the pinned tag plus docs/upstream-option-inventory.md;
+# verified by tests/schema/test-uci-schema.sh. Tab-separated, 10 columns.
+#
+# type:      integer | float | bool | string | list  (upstream `typeof` class;
+#            bool is an integer restricted to 0/1, list is a bash array literal)
+# managed:   user    - free for the user to set
+#            bounded - user-settable, bridge must clamp to a sane non-zero range
+#            forced  - bridge overwrites unconditionally with uci_default
+# essential: yes -> shown in the LuCI Essentials group; a fresh instance needs
+#            only these edited to be a working configuration
+#
+#uci_option	upstream_option	type	uci_default	upstream_default	managed	direction	group	essential	units_range
+output_processing_stats	output_processing_stats	bool	0	0	user	global	logging	no	0 or 1
+output_load_stats	output_load_stats	bool	0	0	user	global	logging	no	0 or 1
+output_reflector_stats	output_reflector_stats	bool	0	0	user	global	logging	no	0 or 1
+output_summary_stats	output_summary_stats	bool	1	0	forced	global	logging	no	0 or 1
+output_cake_changes	output_cake_changes	bool	0	0	user	global	logging	no	0 or 1
+debug	debug	bool	0	1	user	global	logging	no	0 or 1
+log_DEBUG_messages_to_syslog	log_DEBUG_messages_to_syslog	bool	0	0	forced	global	logging	no	0 or 1
+log_to_file	log_to_file	bool	1	1	forced	global	logging	no	0 or 1
+log_file_max_time_mins	log_file_max_time_mins	integer	10	10	bounded	global	logging	no	minutes, > 0
+log_file_max_size_KB	log_file_max_size_KB	integer	2000	2000	bounded	global	logging	no	KB (bytes/1024), > 0
+log_file_path_override	log_file_path_override	string			forced	global	logging	no	absolute path to an existing directory, or empty
+dl_if	dl_if	string	ifb-wan	ifb-wan	user	ingress	essentials	yes	interface name, non-empty
+ul_if	ul_if	string	wan	wan	user	egress	essentials	yes	interface name, non-empty
+pinger_binary	pinger_binary	string	fping	fping	user	global	pingers	no	one of fping, tsping, ping
+reflectors	reflectors	list	1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 9.9.9.9 9.9.9.10 9.9.9.11 94.140.14.15 94.140.14.140 94.140.14.141 94.140.15.15 94.140.15.16 64.6.65.6 156.154.70.1 156.154.70.2 156.154.70.3 156.154.70.4 156.154.70.5 156.154.71.1 156.154.71.2 156.154.71.3 156.154.71.4 156.154.71.5 208.67.220.2 208.67.220.123 208.67.220.220 208.67.222.2 208.67.222.123 185.228.168.9 185.228.168.10	1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 9.9.9.9 9.9.9.10 9.9.9.11 94.140.14.15 94.140.14.140 94.140.14.141 94.140.15.15 94.140.15.16 64.6.65.6 156.154.70.1 156.154.70.2 156.154.70.3 156.154.70.4 156.154.70.5 156.154.71.1 156.154.71.2 156.154.71.3 156.154.71.4 156.154.71.5 208.67.220.2 208.67.220.123 208.67.220.220 208.67.222.2 208.67.222.123 185.228.168.9 185.228.168.10	user	global	reflectors	no	list of IPv4/IPv6 addresses; length should be ≥ no_pingers
+randomize_reflectors	randomize_reflectors	bool	1	1	user	global	reflectors	no	0 or 1
+no_pingers	no_pingers	integer	6	6	user	global	pingers	no	count, ≥ 1 and ≤ ${#reflectors[@]}
+reflector_ping_interval_s	reflector_ping_interval_s	float	0.3	0.3	user	global	pingers	no	seconds
+dl_owd_delta_thr_ms	dl_owd_delta_thr_ms	float	30.0	30.0	user	ingress	detection	no	milliseconds
+ul_owd_delta_thr_ms	ul_owd_delta_thr_ms	float	30.0	30.0	user	egress	detection	no	milliseconds
+dl_avg_owd_delta_thr_ms	dl_avg_owd_delta_thr_ms	float	60.0	60.0	user	ingress	detection	no	milliseconds
+ul_avg_owd_delta_thr_ms	ul_avg_owd_delta_thr_ms	float	60.0	60.0	user	egress	detection	no	milliseconds
+adjust_dl_shaper_rate	adjust_dl_shaper_rate	bool	1	1	user	ingress	shaper	no	0 or 1
+adjust_ul_shaper_rate	adjust_ul_shaper_rate	bool	1	1	user	egress	shaper	no	0 or 1
+min_dl_shaper_rate_kbps	min_dl_shaper_rate_kbps	integer	5000	5000	user	ingress	essentials	yes	Kbit/s, ≤ base
+base_dl_shaper_rate_kbps	base_dl_shaper_rate_kbps	integer	20000	20000	user	ingress	essentials	yes	Kbit/s, between min and max
+max_dl_shaper_rate_kbps	max_dl_shaper_rate_kbps	integer	80000	80000	user	ingress	essentials	yes	Kbit/s, ≥ base
+min_ul_shaper_rate_kbps	min_ul_shaper_rate_kbps	integer	5000	5000	user	egress	essentials	yes	Kbit/s, ≤ base
+base_ul_shaper_rate_kbps	base_ul_shaper_rate_kbps	integer	20000	20000	user	egress	essentials	yes	Kbit/s, between min and max
+max_ul_shaper_rate_kbps	max_ul_shaper_rate_kbps	integer	35000	35000	user	egress	essentials	yes	Kbit/s, ≥ base
+enable_sleep_function	enable_sleep_function	bool	1	1	user	global	idle	no	0 or 1
+connection_active_thr_kbps	connection_active_thr_kbps	integer	2000	2000	user	global	idle	no	Kbit/s
+sustained_idle_sleep_thr_s	sustained_idle_sleep_thr_s	float	60.0	60.0	user	global	idle	no	seconds
+min_shaper_rates_enforcement	min_shaper_rates_enforcement	bool	0	0	user	global	shaper	no	0 or 1
+startup_wait_s	startup_wait_s	float	0.0	0.0	user	global	idle	no	seconds, ≥ 0
+log_file_buffer_size_B	log_file_buffer_size_B	integer	512	512	bounded	global	logging	no	bytes
+log_file_buffer_timeout_ms	log_file_buffer_timeout_ms	integer	500	500	bounded	global	logging	no	milliseconds
+log_file_export_compress	log_file_export_compress	bool	1	1	user	global	logging	no	0 or 1
+ping_extra_args	ping_extra_args	string			user	global	pingers	no	raw argument string, may be empty
+ping_prefix_string	ping_prefix_string	string			user	global	pingers	no	raw command prefix, may be empty
+monitor_achieved_rates_interval_ms	monitor_achieved_rates_interval_ms	integer	200	200	user	global	detection	no	milliseconds
+bufferbloat_detection_window	bufferbloat_detection_window	integer	6	6	user	global	detection	no	samples, > bufferbloat_detection_thr
+bufferbloat_detection_thr	bufferbloat_detection_thr	integer	3	3	user	global	detection	no	samples, ≤ window
+alpha_baseline_increase	alpha_baseline_increase	float	0.001	0.001	user	global	detection	no	EWMA alpha, 0–1
+alpha_baseline_decrease	alpha_baseline_decrease	float	0.9	0.9	user	global	detection	no	EWMA alpha, 0–1
+alpha_delta_ewma	alpha_delta_ewma	float	0.095	0.095	user	global	detection	no	EWMA alpha, 0–1
+shaper_rate_min_adjust_down_bufferbloat	shaper_rate_min_adjust_down_bufferbloat	float	0.99	0.99	user	global	shaper	no	multiplier, 0–1
+shaper_rate_max_adjust_down_bufferbloat	shaper_rate_max_adjust_down_bufferbloat	float	0.75	0.75	user	global	shaper	no	multiplier, 0–1
+shaper_rate_adjust_up_load_high	shaper_rate_adjust_up_load_high	float	1.04	1.04	user	global	shaper	no	multiplier, ≥ 1
+shaper_rate_adjust_down_load_low	shaper_rate_adjust_down_load_low	float	0.99	0.99	user	global	shaper	no	multiplier, 0–1
+shaper_rate_adjust_up_load_low	shaper_rate_adjust_up_load_low	float	1.01	1.01	user	global	shaper	no	multiplier, ≥ 1
+high_load_thr	high_load_thr	float	0.75	0.75	user	global	shaper	no	fraction of current shaper rate, 0–1
+bufferbloat_refractory_period_ms	bufferbloat_refractory_period_ms	integer	300	300	user	global	shaper	no	milliseconds
+decay_refractory_period_ms	decay_refractory_period_ms	integer	1000	1000	user	global	shaper	no	milliseconds
+reflector_health_check_interval_s	reflector_health_check_interval_s	float	1.0	1.0	user	global	reflectors	no	seconds
+reflector_response_deadline_s	reflector_response_deadline_s	float	1.0	1.0	user	global	reflectors	no	seconds
+reflector_misbehaving_detection_window	reflector_misbehaving_detection_window	integer	60	60	user	global	reflectors	no	samples/health-check ticks
+reflector_misbehaving_detection_thr	reflector_misbehaving_detection_thr	integer	3	3	user	global	reflectors	no	offences, ≤ window
+reflector_replacement_interval_mins	reflector_replacement_interval_mins	integer	60	60	user	global	reflectors	no	minutes
+reflector_comparison_interval_mins	reflector_comparison_interval_mins	integer	1	1	user	global	reflectors	no	minutes
+reflector_sum_owd_baselines_delta_thr_ms	reflector_sum_owd_baselines_delta_thr_ms	float	20.0	20.0	user	global	reflectors	no	milliseconds
+reflector_owd_delta_ewma_delta_thr_ms	reflector_owd_delta_ewma_delta_thr_ms	float	10.0	10.0	user	global	reflectors	no	milliseconds
+stall_detection_thr	stall_detection_thr	integer	5	5	user	global	idle	no	multiples of the ping response interval
+connection_stall_thr_kbps	connection_stall_thr_kbps	integer	10	10	user	global	idle	no	Kbit/s
+global_ping_response_timeout_s	global_ping_response_timeout_s	float	10.0	10.0	user	global	idle	no	seconds
+if_up_check_interval_s	if_up_check_interval_s	float	10.0	10.0	user	global	idle	no	seconds

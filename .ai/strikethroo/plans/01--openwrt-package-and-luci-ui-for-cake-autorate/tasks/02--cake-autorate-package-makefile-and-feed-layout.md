@@ -2,7 +2,7 @@
 id: 2
 group: "packaging"
 dependencies: [1]
-status: "pending"
+status: "completed"
 created: 2026-07-23
 skills:
   - openwrt-packaging

@@ -1,2 +1,19 @@
 .claude/worktrees/
 node_modules/
+
+# OpenWrt SDK / buildroot artefacts. Builds must happen OUTSIDE this tree
+# (this repo is only ever registered as a `src-link` feed), but ignore the
+# usual droppings in case someone builds in place.
+/build_dir/
+/staging_dir/
+/bin/
+/dl/
+/tmp/
+/logs/
+/feeds/
+/openwrt-sdk-*/
+*.ipk
+*.apk
+.pkgdir/
+ipkg-*/
+apk-*/

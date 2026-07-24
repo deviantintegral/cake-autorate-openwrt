@@ -375,10 +375,12 @@ The graph is acyclic: every dependency edge points from a lower task ID to a hig
 
 **Phase 1 outcome (verified):** Pinned upstream `lynxthecat/cake-autorate` **v3.2.2**, SHA-256 `892d8e648f6b3705f31799736e697874da3802b5e56ce4aea257cfdf6a376414`. `docs/upstream-option-inventory.md` documents **66** options; verified by fresh download + `sha256sum`, and a name-for-name `diff` against `defaults.sh` (empty diff, 66 = 66).
 
-### Phase 2: Packaging and Configuration Model
+### ✅ Phase 2: Packaging and Configuration Model
 **Parallel Tasks:**
-- Task 002: cake-autorate package Makefile and feed layout (depends on: 001)
-- Task 003: UCI configuration schema and sane defaults (depends on: 001)
+- ✔️ Task 002: cake-autorate package Makefile and feed layout (depends on: 001) — `completed`
+- ✔️ Task 003: UCI configuration schema and sane defaults (depends on: 001) — `completed`
+
+**Phase 2 outcome (verified):** Pinned OpenWrt SDK **25.12.5** (25.12 series confirmed current stable; default pkg manager **apk**). `net/cake-autorate/` + `luci/luci-app-cake-autorate/` feed created. Both packages compile with exit 0 and are `arch: noarch` (`PKG_ARCH:=all` confirmed via `apk adbdump`); install tree verified (`/usr/lib/cake-autorate`, `/usr/libexec/cake-autorate`, `/etc/config/cake-autorate`, `/etc/init.d`, `/etc/collectd/conf.d`). UCI schema covers all 66 upstream options 1:1 with correct int/float/bool/string/list typing; the schema gate passes 32/32 and a name-for-name coverage diff is empty. Type/coverage metadata lives in `docs/uci-option-schema.tsv` (10 columns incl. `managed`, `group`, `essential`) for tasks 004/007 to consume. Independently re-verified: fresh source hash match, fresh schema gate, fresh SDK compile of both `.apk`s.
 
 ### Phase 3: Config Bridge and LuCI Form
 **Parallel Tasks:**

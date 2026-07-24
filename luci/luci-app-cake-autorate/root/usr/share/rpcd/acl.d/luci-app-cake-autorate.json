@@ -1,0 +1,11 @@
+{
+	"luci-app-cake-autorate": {
+		"description": "Grant access to cake-autorate configuration and status",
+		"read": {
+			"uci": [ "cake-autorate" ]
+		},
+		"write": {
+			"uci": [ "cake-autorate" ]
+		}
+	}
+}
