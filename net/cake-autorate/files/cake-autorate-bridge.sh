@@ -316,10 +316,19 @@ stream_from_file() {
 }
 
 stream_from_libuci() {
-	# shellcheck disable=SC1091
-	. /lib/functions.sh
+	# OpenWrt's /lib/functions.sh and its config_* helpers are NOT nounset-clean
+	# -- they reference unbound variables (e.g. IPKG_INSTROOT, CONFIG_LIST_STATE)
+	# -- so the `set -u` this script runs under would abort them mid-load, leaving
+	# no config generated and the service refusing to start on a real device.
+	# Relax nounset for the duration of the libuci interaction, then restore it so
+	# the rest of the bridge keeps its strict-unset safety. (config_foreach runs
+	# _libuci_emit_section synchronously here, so it is covered too.)
+	set +u
+	# shellcheck disable=SC1090,SC1091  # runtime path, overridable for tests
+	. "${CAKE_AUTORATE_FUNCTIONS_SH:-/lib/functions.sh}"
 	config_load cake-autorate
 	config_foreach _libuci_emit_section cake-autorate
+	set -u
 }
 
 # Invoked indirectly by config_foreach (libuci mode only).

@@ -157,11 +157,17 @@ list_instances() {
 		printf '%s\n' $CAKE_AUTORATE_INSTANCES
 		return 0
 	fi
-	[ -r /lib/functions.sh ] || return 0
+	local fns="${CAKE_AUTORATE_FUNCTIONS_SH:-/lib/functions.sh}"
+	[ -r "$fns" ] || return 0
+	# OpenWrt's config_* helpers are not nounset-clean; the `set -u` above would
+	# abort them (this runs inside a $() subshell, so the abort silently yields an
+	# empty instance list). Relax nounset for the libuci block, then restore it.
+	set +u
 	# shellcheck source=/dev/null
-	. /lib/functions.sh
-	config_load cake-autorate 2>/dev/null || return 0
+	. "$fns"
+	config_load cake-autorate 2>/dev/null || { set -u; return 0; }
 	config_foreach _emit_enabled_instance cake-autorate
+	set -u
 }
 
 # shellcheck disable=SC2317  # invoked indirectly by config_foreach
