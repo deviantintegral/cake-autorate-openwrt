@@ -434,3 +434,35 @@ The **VM integration harness** (`tests/integration/run.sh` + Python vmdriver/har
 ### Execution Summary
 - Total Phases: 8
 - Total Tasks: 14
+
+---
+
+## Execution Summary
+
+**Status**: ✅ Completed Successfully
+**Completed Date**: 2026-07-24
+
+### Results
+Delivered a complete, buildable, tested OpenWrt feed for cake-autorate across 8 phases / 14 tasks, all verified against the OpenWrt **25.12.5** SDK and a real KVM VM:
+
+- **Feed & packages** — `net/cake-autorate` (upstream `lynxthecat/cake-autorate` **v3.2.2**, hash-pinned) and `luci-app-cake-autorate`, both `PKG_ARCH:=all` (noarch, single build), install cleanly as `.apk`.
+- **UCI schema + config bridge** — all **66** upstream options modelled 1:1; a deterministic, idempotent UCI→shell bridge with strict int/float/bool/string/list typing, full shell-escaping, forced logging options, and an in-code bidirectional-coverage assertion.
+- **Service** — procd runs one supervised daemon per enabled instance (ordered after sqm; never touches the qdisc).
+- **LuCI** — Essentials-first config form over collapsible/searchable groups; SQM-validated `dl_if`/`ul_if`; a live per-instance status view + Start/Stop/Restart via an rpcd backend.
+- **Statistics** — collectd **exec** source (arch-independent) + `luci-app-statistics` graphs, per instance, populated by construction on a default install.
+- **Tests** — a VM integration harness (**18/18 assertions live**, incl. observed shaping 3000k→60000k→46192k) and a Playwright suite (**6 functional + 5 visual specs live**, 12 masked baselines, human-review gallery).
+- **CI** — a GitHub Actions workflow (build + KVM-aware integration + UI), `actionlint`-clean.
+- **Docs** — README, configuration reference, testing guide, and AGENTS.md.
+
+All off-device suites pass (bridge 35/35, rpcd 66/66, init 17, statistics 18, schema, libuci-regression 4/4, LuCI 13+17); shellcheck / node / actionlint clean; a full-repo security review found no High/Medium issues.
+
+### Noteworthy Events
+- **Two on-device defects found by the live VM run and fixed** (commit `74eb178`): the config bridge and rpcd backend ran `set -u` then sourced OpenWrt's non-nounset-clean `/lib/functions.sh`, aborting the **actual on-device libuci path** — the bridge generated no config and the service refused to start. Off-device unit tests had missed it (they use `--uci-file`/override paths that bypass libuci). Fixed with `set +u` around the libuci block in both; added `tests/regression/test-libuci-nounset.sh` (drives the real path under a nounset-hostile stub; has teeth). The fix was independently confirmed by both the VM harness and the Playwright serve-mode run.
+- **Task granularity vs. long builds** — several subagents stalled when an SDK `make` transitively triggered a kernel build; root cause was `CONFIG_ALL=y` left in the SDK `.config`. The orchestrator reset to a minimal `.config` and completed all package-compile verifications; the CI workflow encodes the minimal-config recipe so this cannot recur.
+- **A Playwright test-code defect** (empty-config and post-Save&Apply specs hung waiting for option rows that don't exist in an empty config) was fixed by waiting on the always-present toolbar; baselines for those two states were then captured and verified.
+- **Induced-load mechanism** — `netem` cannot coexist with the CAKE root qdisc, so the harness induces load by saturating a low base rate with a real download (documented accurately in `docs/testing.md`).
+
+### Necessary follow-ups
+- **Publish the feed to a GitHub repository** (the one documented non-code prerequisite): this repo has no git remote, so the CI workflow is authored + `actionlint`-validated but has not run live. `git remote add` + push makes the three jobs run on hosted `/dev/kvm` runners (Self-Validation step #9's live execution).
+- **Upstream cosmetic bug** — at tag v3.2.2 the daemon self-reports version `3.2.1`; the LuCI app already displays the package version instead. Worth an upstream note.
+- **Upstream arithmetic warnings** — the vendored daemon logs occasional `value too great for base` warnings during reflector/timestamp handling (shaping unaffected); candidate for an upstream follow-up.
