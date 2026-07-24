@@ -1,0 +1,393 @@
+#!/bin/sh
+# shellcheck disable=SC3043
+# cake-autorate.rpcd -- rpcd backend for luci-app-cake-autorate.
+#
+# Owned by plan 01 / task 8. Installed to /usr/libexec/rpcd/cake-autorate
+# (task 2/8 Makefile stanza). rpcd's file-object plugin exposes this script as
+# the ubus object named after the file, i.e. object "cake-autorate", and calls
+#     cake-autorate list             -> print the method schema (JSON)
+#     cake-autorate call <method>    -> method args arrive as JSON on stdin
+# Every method is gated by the package ACL
+# (luci/.../acl.d/luci-app-cake-autorate.json): sqm_interfaces + status are
+# "read", service is "write".
+#
+# METHODS
+#   sqm_interfaces            Derive shaping interfaces from the LIVE SQM config:
+#                             the WAN egress devices in /etc/config/sqm and the
+#                             ifb4<iface> ingress devices SQM created. Returns
+#                             validated choices for the LuCI UI (task 9): ul_if
+#                             <- egress_choices, dl_if <- ingress_choices, plus a
+#                             per-interface mismatch flag.
+#   status {instance?}        Per-instance live status parsed from the daemon log
+#                             stream /var/log/cake-autorate.<instance>.log. Shares
+#                             the SUMMARY 13-field contract with task 6's collectd
+#                             source (docs/upstream-option-inventory.md 3.3).
+#   service {action,instance?} start|stop|restart|reload the service via
+#                             /etc/init.d/cake-autorate.
+#
+# SECURITY
+#   * instance names are validated against [A-Za-z0-9_]+ before touching a path
+#     (no traversal) or an init.d call (no injection);
+#   * service actions are validated against a fixed allowlist before any exec;
+#   * the log is read with a bounded `tail`, never sourced;
+#   * all inputs are passed as quoted argv, never eval'd.
+#
+# TESTABILITY
+#   Sourcing this file with CAKE_AUTORATE_RPCD_LIB=1 defines its functions but
+#   does NOT run the dispatch, so tests/rpcd/test-rpcd.sh can unit-test the
+#   custom logic (parser, interface derivation, validators) off-device. The
+#   following env vars override live sources for tests:
+#     CAKE_AUTORATE_LOG_DIR    (default /var/log)
+#     CAKE_AUTORATE_RUN_DIR    (default /var/run/cake-autorate)
+#     CAKE_AUTORATE_SQM_CONFIG (default /etc/config/sqm)
+#     CAKE_AUTORATE_NET_DIR    (default /sys/class/net)
+#     CAKE_AUTORATE_INSTANCES  (default: enabled UCI sections via libuci)
+#     CAKE_AUTORATE_INIT       (default /etc/init.d/cake-autorate)
+
+set -u
+
+# ubus status codes returned to rpcd via the exit status.
+US_INVALID_COMMAND=1
+US_INVALID_ARGUMENT=2
+
+# --------------------------------------------------------------------------
+# Input validation (SECURITY-CRITICAL). Keep these total and side-effect free.
+# --------------------------------------------------------------------------
+
+# An instance id names a file path (/var/log/cake-autorate.<id>.log) and is
+# handed to /etc/init.d/cake-autorate. Restrict to [A-Za-z0-9_]+ so it can never
+# introduce a path component (../), a separator (/), whitespace, or a shell
+# metacharacter. Matches the UCI section-name rule enforced by the config bridge.
+valid_instance() {
+	case "$1" in
+		'' | *[!A-Za-z0-9_]*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+# Service actions are a fixed allowlist -- nothing else may reach init.d.
+valid_action() {
+	case "$1" in
+		start | stop | restart | reload) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+# --------------------------------------------------------------------------
+# Minimal JSON emit helpers (no jshn dependency, so the whole script is
+# off-device testable). Numeric values are emitted bare; everything else is
+# emitted as an escaped JSON string.
+# --------------------------------------------------------------------------
+json_bool() { case "$1" in 1 | true | yes | on) printf 'true' ;; *) printf 'false' ;; esac; }
+
+# Read newline-separated tokens on stdin, print a JSON array of strings.
+json_str_array() {
+	awk '
+		function jesc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
+		NF == 0 { next }
+		{ printf "%s\"%s\"", sep, jesc($0); sep = "," }
+	' | { printf '['; cat; printf ']'; }
+}
+
+# Read "key<TAB>value" lines on stdin, print a JSON object body (no braces).
+# A value that looks like a signed integer/float is emitted as a JSON number;
+# anything else is emitted as an escaped JSON string.
+json_fields_body() {
+	awk -F'\t' '
+		function jesc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
+		{
+			k = $1; v = $2
+			if (v ~ /^-?[0-9]+(\.[0-9]+)?$/)
+				printf "%s\"%s\":%s", sep, jesc(k), v
+			else
+				printf "%s\"%s\":\"%s\"", sep, jesc(k), jesc(v)
+			sep = ","
+		}
+	'
+}
+
+err_json() { printf '{"error":"%s"}\n' "$1"; }
+
+# --------------------------------------------------------------------------
+# SUMMARY log-line parser -- THE contract shared with task 6's collectd source.
+#
+# Input : one raw log line ($1).
+# Output: on a valid SUMMARY line, "key<TAB>value" lines for the fields the
+#         status view needs, and return 0. On ANY other line (the unprefixed
+#         SUMMARY_HEADER, a DATA/LOAD/... TYPE, a short/blank line) print nothing
+#         and return 1.
+#
+# Field indices are the 0-based positions after splitting on "; " from
+# docs/upstream-option-inventory.md 3.3 (awk fields are 1-based, hence +1):
+#   0=SUMMARY 1=datetime 2=epoch 3=dl_achieved_kbps 4=ul_achieved_kbps
+#   5=dl_sum_delays 6=ul_sum_delays 7=dl_avg_owd_delta_us 8=ul_avg_owd_delta_us
+#   9=dl_load_condition 10=ul_load_condition 11=cake_dl_rate_kbps
+#   12=cake_ul_rate_kbps
+# --------------------------------------------------------------------------
+parse_summary_line() {
+	printf '%s\n' "$1" | awk -F'; ' '
+		$1 != "SUMMARY" { exit 1 }
+		NF < 13         { exit 1 }
+		{
+			print "dl_achieved_kbps\t"    $4
+			print "ul_achieved_kbps\t"    $5
+			print "dl_sum_delays\t"       $6
+			print "ul_sum_delays\t"       $7
+			print "dl_avg_owd_delta_us\t" $8
+			print "ul_avg_owd_delta_us\t" $9
+			print "dl_load_condition\t"   $10
+			print "ul_load_condition\t"   $11
+			print "cake_dl_rate_kbps\t"   $12
+			print "cake_ul_rate_kbps\t"   $13
+			print "datetime\t"            $2
+			print "epoch\t"               $3
+		}
+	'
+}
+
+# --------------------------------------------------------------------------
+# status
+# --------------------------------------------------------------------------
+
+# Enumerate the instances to report. A test/caller override wins; otherwise the
+# enabled UCI sections (the daemon runs one per enabled section).
+list_instances() {
+	if [ -n "${CAKE_AUTORATE_INSTANCES:-}" ]; then
+		# shellcheck disable=SC2086  # deliberate split of the space-separated list
+		printf '%s\n' $CAKE_AUTORATE_INSTANCES
+		return 0
+	fi
+	[ -r /lib/functions.sh ] || return 0
+	# shellcheck source=/dev/null
+	. /lib/functions.sh
+	config_load cake-autorate 2>/dev/null || return 0
+	config_foreach _emit_enabled_instance cake-autorate
+}
+
+# shellcheck disable=SC2317  # invoked indirectly by config_foreach
+_emit_enabled_instance() {
+	local sid="$1" en
+	config_get_bool en "$sid" enabled 0
+	[ "$en" = 1 ] && printf '%s\n' "$sid"
+}
+
+# JSON object for one instance's status (braces included). Never fails: a
+# missing or dataless log degrades to {"available":false,"reason":...}.
+status_instance_json() {
+	local inst="$1"
+	local logdir="${CAKE_AUTORATE_LOG_DIR:-/var/log}"
+	local rundir="${CAKE_AUTORATE_RUN_DIR:-/var/run/cake-autorate}"
+	local log="$logdir/cake-autorate.$inst.log"
+	local line parsed run_json body
+
+	# Best-effort run state (device-only; run_path exists only while running).
+	run_json='"running":false'
+	if [ -d "$rundir/$inst" ]; then
+		local mt now up
+		mt=$(stat -c %Y "$rundir/$inst" 2>/dev/null || echo '')
+		now=$(date +%s 2>/dev/null || echo '')
+		if [ -n "$mt" ] && [ -n "$now" ] && [ "$now" -ge "$mt" ]; then
+			up=$((now - mt))
+			run_json="\"running\":true,\"uptime_s\":$up"
+		else
+			run_json='"running":true'
+		fi
+	fi
+
+	if [ ! -f "$log" ]; then
+		printf '{"available":false,"reason":"no-log",%s}' "$run_json"
+		return 0
+	fi
+	# Bounded read: never source the log, only tail a fixed window and keep the
+	# newest real SUMMARY line (the unprefixed SUMMARY_HEADER cannot match
+	# "^SUMMARY; " because it starts with "SUMMARY_HEADER;").
+	line=$(tail -n 200 "$log" 2>/dev/null | grep '^SUMMARY; ' | tail -n1)
+	if [ -z "$line" ]; then
+		printf '{"available":false,"reason":"no-data",%s}' "$run_json"
+		return 0
+	fi
+	parsed=$(parse_summary_line "$line") || {
+		printf '{"available":false,"reason":"no-data",%s}' "$run_json"
+		return 0
+	}
+	body=$(printf '%s\n' "$parsed" | json_fields_body)
+	printf '{"available":true,%s,%s}' "$run_json" "$body"
+}
+
+do_status() {
+	local want="$1" insts inst first=1
+	if [ -n "$want" ]; then
+		valid_instance "$want" || { err_json "invalid instance name"; return "$US_INVALID_ARGUMENT"; }
+		insts="$want"
+	else
+		insts=$(list_instances)
+	fi
+	printf '{'
+	for inst in $insts; do
+		valid_instance "$inst" || continue
+		[ "$first" = 1 ] || printf ','
+		first=0
+		printf '"%s":%s' "$inst" "$(status_instance_json "$inst")"
+	done
+	printf '}\n'
+}
+
+# --------------------------------------------------------------------------
+# sqm_interfaces
+# --------------------------------------------------------------------------
+
+# Live ifb4* devices, one per line, sorted. These are the ingress devices SQM
+# created; each is a valid dl_if choice.
+list_ifb_devices() {
+	local d="${CAKE_AUTORATE_NET_DIR:-/sys/class/net}" f base
+	[ -d "$d" ] || return 0
+	for f in "$d"/ifb4*; do
+		[ -e "$f" ] || continue
+		base=${f##*/}
+		printf '%s\n' "$base"
+	done | sort
+}
+
+# Parse /etc/config/sqm into "iface<TAB>enabled" lines, one per section that
+# declares an `option interface`. enabled defaults to 1 when the key is absent.
+parse_sqm_sections() {
+	local f="${1:-${CAKE_AUTORATE_SQM_CONFIG:-/etc/config/sqm}}"
+	[ -f "$f" ] || return 0
+	awk '
+		function deq(s) { gsub(/["\047]/, "", s); return s }   # \047 == single quote
+		$1 == "config" {
+			if (have) print iface "\t" en
+			iface = ""; en = "1"; have = 0; next
+		}
+		$1 == "option" && $2 == "interface" { iface = deq($3); have = 1 }
+		$1 == "option" && $2 == "enabled"   { en = deq($3) }
+		END { if (have) print iface "\t" en }
+	' "$f"
+}
+
+do_sqm_interfaces() {
+	local sqm="${CAKE_AUTORATE_SQM_CONFIG:-/etc/config/sqm}"
+	local ifbs sections line iface en ifb present mismatch
+	local objs='' sep='' egress_list=''
+
+	ifbs=$(list_ifb_devices)
+	sections=$(parse_sqm_sections "$sqm")
+
+	# Build the per-interface object array and the egress choice list.
+	# (Iterate the tab-separated section stream without a subshell so the
+	# accumulator survives -- read from a here-string via a temp is avoided by
+	# using a while over a printf pipe would subshell; use word-splitting.)
+	local IFSAVE="$IFS"
+	IFS='
+'
+	for line in $sections; do
+		iface=${line%%	*}
+		en=${line#*	}
+		[ -n "$iface" ] || continue
+		ifb="ifb4$iface"
+		if printf '%s\n' "$ifbs" | grep -qx "$ifb"; then present=1; else present=0; fi
+		# mismatch: SQM says shape this egress but its ifb ingress isn't live.
+		if [ "$(json_bool "$en")" = true ] && [ "$present" = 0 ]; then mismatch=1; else mismatch=0; fi
+		objs="$objs$sep{\"egress\":\"$iface\",\"ingress_ifb\":\"$ifb\",\"sqm_enabled\":$(json_bool "$en"),\"ifb_present\":$(json_bool "$present"),\"mismatch\":$(json_bool "$mismatch")}"
+		sep=','
+		egress_list="$egress_list$iface
+"
+	done
+	IFS="$IFSAVE"
+
+	local present_flag='false'
+	[ -n "$sections" ] && present_flag='true'
+
+	printf '{"sqm_config_present":%s,"interfaces":[%s],"egress_choices":%s,"ingress_choices":%s,"ifb_devices":%s}\n' \
+		"$present_flag" \
+		"$objs" \
+		"$(printf '%s' "$egress_list" | json_str_array)" \
+		"$(printf '%s\n' "$ifbs" | json_str_array)" \
+		"$(printf '%s\n' "$ifbs" | json_str_array)"
+}
+
+# --------------------------------------------------------------------------
+# service
+# --------------------------------------------------------------------------
+do_service() {
+	local action="$1" instance="${2:-}" init code
+	init="${CAKE_AUTORATE_INIT:-/etc/init.d/cake-autorate}"
+
+	valid_action "$action" || { err_json "invalid action (allowed: start stop restart reload)"; return "$US_INVALID_ARGUMENT"; }
+	if [ -n "$instance" ]; then
+		valid_instance "$instance" || { err_json "invalid instance name"; return "$US_INVALID_ARGUMENT"; }
+	fi
+
+	if [ ! -x "$init" ]; then
+		err_json "init script not found: $init"
+		return "$US_INVALID_ARGUMENT"
+	fi
+
+	if [ -n "$instance" ]; then
+		"$init" "$action" "$instance" >/dev/null 2>&1
+		code=$?
+	else
+		"$init" "$action" >/dev/null 2>&1
+		code=$?
+	fi
+
+	if [ -n "$instance" ]; then
+		printf '{"action":"%s","instance":"%s","code":%s}\n' "$action" "$instance" "$code"
+	else
+		printf '{"action":"%s","code":%s}\n' "$action" "$code"
+	fi
+}
+
+# --------------------------------------------------------------------------
+# rpcd dispatch: list / call
+# --------------------------------------------------------------------------
+cmd_list() {
+	cat <<-'EOF'
+	{
+		"sqm_interfaces": {},
+		"status": { "instance": "" },
+		"service": { "action": "", "instance": "" }
+	}
+	EOF
+}
+
+# Extract a top-level string field from the request JSON on stdin.
+json_field() { jsonfilter -e "@.$1" 2>/dev/null; }
+
+cmd_call() {
+	local method="$1" REQ instance action rc
+	REQ=$(cat)
+	case "$method" in
+		sqm_interfaces)
+			do_sqm_interfaces
+			;;
+		status)
+			instance=$(printf '%s' "$REQ" | json_field instance)
+			do_status "$instance" || exit $?
+			;;
+		service)
+			action=$(printf '%s' "$REQ" | json_field action)
+			instance=$(printf '%s' "$REQ" | json_field instance)
+			do_service "$action" "$instance" || exit $?
+			;;
+		*)
+			err_json "unknown method: $method"
+			exit "$US_INVALID_COMMAND"
+			;;
+	esac
+	rc=$?
+	return "$rc"
+}
+
+main() {
+	case "${1:-}" in
+		list) cmd_list ;;
+		call) cmd_call "${2:-}" ;;
+		*) cmd_list ;;
+	esac
+}
+
+# Only run the dispatch when executed by rpcd; stay inert when sourced by tests.
+if [ "${CAKE_AUTORATE_RPCD_LIB:-0}" != 1 ]; then
+	main "$@"
+fi

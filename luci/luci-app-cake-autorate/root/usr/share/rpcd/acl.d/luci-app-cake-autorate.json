@@ -1,15 +1,21 @@
 {
 	"luci-app-cake-autorate": {
-		"description": "Grant access to cake-autorate configuration and runtime log files",
+		"description": "Grant access to cake-autorate configuration, runtime log files and the rpcd backend",
 		"read": {
 			"uci": [ "cake-autorate" ],
 			"file": {
 				"/var/log/cake-autorate.*.log": [ "read" ],
 				"/var/log/cake-autorate.*.log.old": [ "read" ]
+			},
+			"ubus": {
+				"cake-autorate": [ "sqm_interfaces", "status" ]
 			}
 		},
 		"write": {
-			"uci": [ "cake-autorate" ]
+			"uci": [ "cake-autorate" ],
+			"ubus": {
+				"cake-autorate": [ "service" ]
+			}
 		}
 	}
 }

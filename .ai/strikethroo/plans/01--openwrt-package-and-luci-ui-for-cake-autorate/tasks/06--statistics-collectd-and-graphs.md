@@ -2,7 +2,7 @@
 id: 6
 group: "statistics"
 dependencies: [1, 4]
-status: "pending"
+status: "completed"
 created: 2026-07-23
 skills:
   - collectd

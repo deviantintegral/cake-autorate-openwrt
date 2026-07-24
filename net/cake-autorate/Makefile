@@ -44,7 +44,9 @@ define Package/cake-autorate
   SUBMENU:=Routing and Redirection
   TITLE:=CAKE with adaptive bandwidth for bufferbloat control
   URL:=https://github.com/lynxthecat/cake-autorate
-  DEPENDS:=+bash +fping +tc-tiny +kmod-sched-cake +sqm-scripts +collectd-mod-tail
+  # collectd-mod-exec: task 6 feeds luci-app-statistics via a collectd `exec`
+  # reader (the tail plugin cannot map the string load-condition to a number).
+  DEPENDS:=+bash +fping +tc-tiny +kmod-sched-cake +sqm-scripts +collectd-mod-exec
   PKGARCH:=$(PKG_ARCH)
 endef
 
@@ -56,7 +58,7 @@ define Package/cake-autorate/description
 
  This package ships the upstream bash daemon together with OpenWrt
  integration: a UCI configuration, a procd service, a UCI-to-native config
- bridge and a collectd tail source feeding luci-app-statistics.
+ bridge and a collectd exec source feeding luci-app-statistics.
 endef
 
 define Package/cake-autorate/conffiles
@@ -108,10 +110,19 @@ define Package/cake-autorate/install
 	$(INSTALL_BIN) ./files/cake-autorate-bridge.sh \
 		$(1)/usr/libexec/cake-autorate/cake-autorate-bridge.sh
 
-	# --- collectd tail source (task 6 owns the body) --------------------
+	# --- collectd exec statistics source (task 6 owns the body) ---------
 	$(INSTALL_DIR) $(1)/etc/collectd/conf.d
 	$(INSTALL_CONF) ./files/cake-autorate.collectd.conf \
 		$(1)/etc/collectd/conf.d/cake-autorate.conf
+	# task 6: the exec reader parsed by the collectd config above.
+	$(INSTALL_DIR) $(1)/usr/libexec/collectd
+	$(INSTALL_BIN) ./files/cake-autorate-collectd.sh \
+		$(1)/usr/libexec/collectd/cake-autorate-collectd.sh
+
+	# task 008: rpcd backend (SQM interface derivation, log-stream status,
+	# service controls) -- object name "cake-autorate", gated by the LuCI ACL.
+	$(INSTALL_DIR) $(1)/usr/libexec/rpcd
+	$(INSTALL_BIN) ./files/cake-autorate.rpcd $(1)/usr/libexec/rpcd/cake-autorate
 endef
 
 $(eval $(call BuildPackage,cake-autorate))

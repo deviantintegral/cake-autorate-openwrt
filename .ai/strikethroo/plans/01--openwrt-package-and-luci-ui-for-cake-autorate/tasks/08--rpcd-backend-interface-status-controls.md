@@ -2,7 +2,7 @@
 id: 8
 group: "luci"
 dependencies: [2, 4]
-status: "pending"
+status: "completed"
 created: 2026-07-23
 skills:
   - shell

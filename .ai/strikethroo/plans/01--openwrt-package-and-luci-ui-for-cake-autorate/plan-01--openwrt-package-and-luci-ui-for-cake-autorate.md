@@ -389,11 +389,13 @@ The graph is acyclic: every dependency edge points from a lower task ID to a hig
 
 **Phase 3 outcome (verified):** `cake-autorate-bridge.sh` renders deterministic, idempotent per-instance `config.<name>.sh`: strict int/float/bool/string/list typing, full shell-escaping of string values, forced logging options written last (hostile-UCI test proves a user cannot disable the stats feed), and an in-code bidirectional-coverage assertion (stray/dropped key → fatal). 35/35 bridge tests pass, shellcheck clean. LuCI config form (`overview.js` + `options.js`) renders all 66 options — Essentials tab first, six collapsible group tabs, client-side search — with a load-time coverage guard; menu at Services → CAKE Autorate, ACLs scoped to uci + log files. Verified: 13/13 JS unit tests, `node --check` clean, 66-option coverage diff empty, both JSONs valid, and a fresh SDK compile of `luci-app-cake-autorate` (exit 0, packages overview/options/menu/acl). A full-repo security review found **no High/Medium issues** — the UCI→root-shell injection surface is correctly escaped/validated.
 
-### Phase 4: Service, Statistics, and rpcd Backend
+### ✅ Phase 4: Service, Statistics, and rpcd Backend
 **Parallel Tasks:**
-- Task 005: procd init script and multi-instance service lifecycle (depends on: 002, 004)
-- Task 006: Statistics integration — collectd tail/exec + luci-app-statistics graphs (depends on: 001, 004)
-- Task 008: rpcd backend — SQM interface derivation, log-stream status, service controls (depends on: 002, 004)
+- ✔️ Task 005: procd init script and multi-instance service lifecycle (depends on: 002, 004) — `completed`
+- ✔️ Task 006: Statistics integration — collectd exec + luci-app-statistics graphs (depends on: 001, 004) — `completed`
+- ✔️ Task 008: rpcd backend — SQM interface derivation, log-stream status, service controls (depends on: 002, 004) — `completed`
+
+**Phase 4 outcome (verified):** procd init runs one supervised daemon per enabled UCI section (bridge-first with abort-on-failure, reload reconciles cold-start/disable/change, START=97 after sqm's 50, never touches tc). Statistics use a collectd **exec** reader (tail was insufficient — string load-condition→numeric gauge mapping and per-instance labeling from the log filename) exporting shaper/achieved/OWD/load metrics under stock collectd types, with a `luci-app-statistics` graph def; 18/18 parser tests. rpcd backend exposes `sqm_interfaces` (SQM-derived egress + `ifb4*` ingress with mismatch flag), `status` (per-instance, parsed from the shared SUMMARY contract), and `service` (allowlisted actions) — hardened input validation (`[A-Za-z0-9_]+` instance names, action allowlist, bounded log tail never sourced); ACL grants split ubus read/write; 66/66 tests. Init 17/17. All shellcheck-clean. Verified: both packages compile (exit 0) and the apk ships the init, rpcd, collectd exec reader, and collectd conf; task-6 and task-8 Makefile stanzas coexist cleanly. _(Agents 005/008 suspended on an accidental full-dependency build; the orchestrator completed the SDK-build verification and confirmed all deliverables.)_
 
 ### Phase 5: Live UI and VM Integration
 **Parallel Tasks:**
