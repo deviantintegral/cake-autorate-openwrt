@@ -421,9 +421,11 @@ The **VM integration harness** (`tests/integration/run.sh` + Python vmdriver/har
 
 **Phase 7 outcome (verified):** `.github/workflows/ci.yml` — one workflow on push + pull_request, three jobs pinned to 25.12.5: **build** (SDK, minimal `.config` avoiding `CONFIG_ALL`, single compile of both packages — no arch matrix — uploads `.apk` artifacts, caches SDK/dl/build_dir), **integration** (needs build; installs qemu/e2fsprogs/python3, runs `tests/integration/run.sh` + `--negative` when `/dev/kvm` present, uploads VM evidence), **ui** (needs build; Playwright functional + visual + always-published gallery). KVM absence is a **visible skip** — `::warning` annotation + a `GITHUB_STEP_SUMMARY` "visible SKIP, not a pass" line, VM steps gated on `kvm.outputs.available` — never a silent green; build + gallery stay green independently. Verified: `actionlint` clean (exit 0, shellcheck-checked run blocks), YAML parses with the correct `needs` graph, and every referenced script/path exists. Live execution is deferred to GitHub (no remote yet — a documented one-time setup step, not a code deliverable).
 
-### Phase 8: Documentation
+### ✅ Phase 8: Documentation
 **Parallel Tasks:**
-- Task 014: README, configuration reference, testing doc, and AGENTS.md (depends on: 004, 006, 009, 010, 013)
+- ✔️ Task 014: README, configuration reference, testing doc, and AGENTS.md (depends on: 004, 006, 009, 010, 013) — `completed`
+
+**Phase 8 outcome (verified):** Four docs, all fact-checked against the shipped code — `README.md` (packages, 25.12.5 SDK build, `apk add` not opkg, sqm-scripts dependency + SQM-owns-qdisc model, `/root/cake-autorate/` coexistence with no auto-migration, upstream-submission note, the no-remote-yet CI prerequisite), `docs/configuration.md` (Essentials-first vs grouped options, SQM-validated `dl_if`/`ul_if`, multi-WAN, package-managed output, reading Statistics → Graphs), `docs/testing.md` (VM harness incl. the **accurately-described** induced-load mechanism — low base rate + real download, *not* netem — the `--negative` self-test, Playwright functional/visual, the `--update-snapshots` baseline command, gallery, CI), and `AGENTS.md` (feed layout, the bidirectional UCI↔config bridge invariant, the log-stream-is-the-only-runtime-interface fact, sqm dependency, running the suites + CI). The standalone submission-notes doc was intentionally dropped (folded into README/AGENTS.md). Verified: all four exist, every required topic present, and spot-checks (apk, v3.2.2, `PKG_ARCH:=all`, per-instance log path, CI artifact names) match source.
 
 ### Post-phase Actions
 - After each phase, run `/config/hooks/POST_PHASE.md` and verify task outputs against real evidence (commands run, exit codes, artifacts) before advancing.
