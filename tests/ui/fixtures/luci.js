@@ -57,6 +57,10 @@ async function login(page, state) {
   const luci = makeLuci(state);
   await page.goto(luci.url(luci.overviewPath), { waitUntil: 'domcontentloaded' });
 
+  // LuCI's login template (luci-base ucode/template/sysauth.ut) renders its
+  // <label>s WITHOUT a `for` attribute, so the fields have no accessible name and
+  // getByLabel() cannot reach them -- the name attribute is the stable hook here.
+  // The submit control does have one ("Log in"), so it uses a role locator.
   const pw = page.locator('input[name="luci_password"]');
   // The login form is server-rendered, so it is present immediately if needed.
   if ((await pw.count()) === 0) {
@@ -67,17 +71,12 @@ async function login(page, state) {
   if ((await user.count()) > 0) {
     await user.fill(luci.username);
   }
-  await pw.first().fill(luci.password);
+  await pw.fill(luci.password);
 
-  const submit = page.locator(
-    'input[type="submit"], button[type="submit"], .cbi-button-apply, .btn'
-  ).first();
-  await Promise.all([
-    page.waitForLoadState('load'),
-    submit.click(),
-  ]);
+  await page.getByRole('button', { name: 'Log in' }).click();
 
-  // After a successful login the password field is gone.
+  // After a successful login the password field is gone. This web-first
+  // assertion is the navigation wait -- no waitForLoadState race needed.
   await base.expect(page.locator('input[name="luci_password"]'))
     .toHaveCount(0, { timeout: 20000 });
 }

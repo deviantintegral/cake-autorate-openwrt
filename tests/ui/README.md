@@ -38,7 +38,9 @@ gitignored. Browser binaries live in `~/.cache/ms-playwright` (never in-repo).
     npx playwright test --project=visual         # full-page screenshot diffs
 
 Requires KVM (the suite boots a QEMU VM). Without a live LuCI every spec
-**skips** (never fails) — see "No live LuCI" below.
+**skips** (never fails) — see "No live LuCI" below. Set `CA_IT_REQUIRE_KVM=1` to
+turn those skips into hard failures when a green run must mean the browser really
+drove a live LuCI.
 
 ## Visual-regression suite (`visual` project) — task 12
 
@@ -145,6 +147,21 @@ OpenWrt default user `root`; the serve harness sets the password
 If the VM cannot boot (e.g. a runner without `/dev/kvm`), `run.sh` prints
 `INTEGRATION_SKIPPED` and exits 0; globalSetup records `available:false` and
 every spec **skips** with a reason. CI stays green-or-skipped, never falsely red.
+
+### `CA_IT_REQUIRE_KVM=1` — skips become hard failures
+
+Skipping is only safe when nobody claimed the run had to happen. Set
+`CA_IT_REQUIRE_KVM=1` (CI does, for both the functional and visual steps) and
+globalSetup **throws** instead of recording `available:false`, for *any* reason
+the endpoint failed to come up — no KVM, apks missing from `CA_IT_APK_DIR`, a
+boot timeout.
+
+This matters because the skip path is indistinguishable from success at the exit
+code: without it, an infra breakage silently skips every spec and
+`npx playwright test` still exits 0. That has bitten this repo for real — a
+half-built SDK left `luci-app-cake-autorate-1.0.0-r1.apk` missing, `run.sh` exited
+3, all specs skipped, and the run reported success. Use the env var whenever a
+green result is supposed to mean "the browser actually drove a live LuCI".
 
 ## Config essentials reused by task 12
 

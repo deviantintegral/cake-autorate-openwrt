@@ -11,10 +11,10 @@
  * so the diff sees the page STRUCTURE (two instance cards, the metric grid,
  * the global + per-instance controls) but not the churning numbers.
  */
-const { test, expect } = require('../fixtures/luci');
+const { test, expect, luciBeforeEach } = require('../fixtures/luci');
 const { shot } = require('./visual-helpers');
 
-test.beforeEach(require('../fixtures/luci').luciBeforeEach);
+test.beforeEach(luciBeforeEach);
 
 async function gotoStatus(page, luci) {
   await page.goto(luci.url(luci.statusPath), { waitUntil: 'domcontentloaded' });
@@ -30,14 +30,14 @@ test.describe('visual: status view', () => {
   test('live status -- two running instances (dynamic cells masked)', async ({ page, luci }) => {
     await gotoStatus(page, luci);
 
-    // Prefer the data-available layout (metric grid) for a stable structure: a
-    // running daemon reaches it within a couple of polls. If it never arrives in
-    // budget we still capture whatever rendered -- the baseline just reflects the
-    // "no data yet" layout, which is itself a valid, masked, deterministic state.
-    await page
-      .locator('.cake-instance[data-cake-instance="primary"] .cake-metric-table')
-      .waitFor({ state: 'visible', timeout: 30000 })
-      .catch(() => {});
+    // The committed baseline shows the data-available layout (the metric grid),
+    // which a running daemon reaches within a couple of polls. Assert it rather
+    // than swallowing the wait: if the grid never arrives the screenshot would
+    // capture the "no data yet" layout and fail the pixel diff anyway, so failing
+    // HERE reports the actual cause instead of an unexplained visual mismatch.
+    await expect(
+      page.locator('.cake-instance[data-cake-instance="primary"] .cake-metric-table')
+    ).toBeVisible({ timeout: 30000 });
 
     await shot(page, 'status-view');
   });

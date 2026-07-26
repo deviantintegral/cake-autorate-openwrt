@@ -33,12 +33,16 @@ async function activateTab(page, tabId) {
  * so type with pressSequentially rather than fill().
  */
 async function addInstance(page, name) {
-  const nameInput = page.locator('.cbi-section-create input.cbi-section-create-name').first();
+  const createRow = page.locator('.cbi-section-create');
+  const nameInput = createRow.locator('input.cbi-section-create-name');
   await expect(nameInput).toBeVisible();
   await nameInput.click();
   await nameInput.pressSequentially(name, { delay: 20 });
 
-  const addBtn = page.locator('.cbi-section-create .cbi-button-add').first();
+  // LuCI renders this as <button class="cbi-button-add" title="Add">Add</button>
+  // (luci-base form.js), so it has a real accessible name; scope it to the
+  // create row to keep the role locator unambiguous.
+  const addBtn = createRow.getByRole('button', { name: 'Add' });
   await expect(addBtn).toBeEnabled();
   await addBtn.click();
 
@@ -53,19 +57,32 @@ async function addInstance(page, name) {
  * confirmation needed (connectivity is never lost on a forwarded port).
  */
 async function saveApply(page) {
-  const apply = page.locator('.cbi-page-actions .cbi-button-apply').first();
+  // NOT a role locator: LuCI builds this control with ui.ComboButton, which
+  // extends UIDropdown and renders a <div class="cbi-dropdown cbi-button-apply">
+  // (luci.js addFooter / ui.js UIComboButton.render) -- there is no button role
+  // and no accessible name to target, so the widget class is the stable hook.
+  const apply = page.locator('.cbi-page-actions .cbi-button-apply');
   await expect(apply).toBeVisible();
   await apply.click();
 
   const overlay = page.locator('#modal_overlay');
   // The apply modal appears within a beat; tolerate the (rare) instant apply.
   await overlay.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
-  await expect(overlay).toBeHidden({ timeout: 95 * 1000 });
+  // MUST stay below playwright.config.js `timeout` (90 s), otherwise the test
+  // times out first and the real failure is reported as an opaque test timeout
+  // instead of "the apply overlay never cleared". Observed applies take ~5 s.
+  await expect(overlay).toBeHidden({ timeout: 60 * 1000 });
 }
 
-/* Remove a named instance via its Delete button (carries data-section-id). */
+/*
+ * Remove a named instance via its Delete button. LuCI renders one Delete button
+ * per section (luci-base form.js), so the accessible name alone is ambiguous --
+ * and() intersects it with the section-scoped data hook to pin the right one
+ * while still asserting the button really is the accessible "Delete" control.
+ */
 async function removeInstance(page, name) {
-  const del = page.locator(`button[data-section-id="${name}"]`).first();
+  const del = page.getByRole('button', { name: 'Delete' })
+    .and(page.locator(`[data-section-id="${name}"]`));
   await expect(del).toBeVisible();
   await del.click();
 }

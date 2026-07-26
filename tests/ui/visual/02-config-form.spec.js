@@ -15,14 +15,14 @@
  * no-op here; screenshots are deterministic because the seeded UCI + the values
  * we set explicitly are fixed, and the engine/viewport are pinned in config.
  */
-const { test, expect } = require('../fixtures/luci');
+const { test, expect, luciBeforeEach } = require('../fixtures/luci');
 const {
   activateTab, addInstance, saveApply, deleteInstance, setValue,
 } = require('../functional/helpers');
 const { shot } = require('./visual-helpers');
 
 test.describe.configure({ mode: 'serial' });
-test.beforeEach(require('../fixtures/luci').luciBeforeEach);
+test.beforeEach(luciBeforeEach);
 
 // One representative option row per group tab (must become visible once active).
 const TABS = [

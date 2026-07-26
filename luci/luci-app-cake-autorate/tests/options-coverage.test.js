@@ -134,4 +134,74 @@ test('OPTIONS names are exactly the 66 names in uci-option-schema.tsv', function
 	assert.deepStrictEqual(fromView, fromTsv);
 });
 
+/* --- checkRateOrder: the min <= base <= max promise in the Essentials help --- */
+
+test('checkRateOrder: a consistent trio passes', function () {
+	assert.strictEqual(mod.checkRateOrder(2000, 5000, 40000), null);
+	assert.strictEqual(mod.checkRateOrder('2000', '5000', '40000'), null);
+	assert.strictEqual(mod.checkRateOrder(5000, 5000, 5000), null, 'equal values are legal');
+});
+
+test('checkRateOrder: min above base is rejected', function () {
+	const err = mod.checkRateOrder(9000, 5000, 40000);
+	assert.ok(err);
+	assert.strictEqual(err.code, 'min-gt-base');
+	assert.strictEqual(err.a, 9000);
+	assert.strictEqual(err.b, 5000);
+});
+
+test('checkRateOrder: max below base is rejected', function () {
+	const err = mod.checkRateOrder(2000, 5000, 4000);
+	assert.ok(err);
+	assert.strictEqual(err.code, 'max-lt-base');
+});
+
+test('checkRateOrder: min above max is rejected when base is absent', function () {
+	const err = mod.checkRateOrder(9000, '', 4000);
+	assert.ok(err);
+	assert.strictEqual(err.code, 'min-gt-max');
+});
+
+test('checkRateOrder: an empty or non-numeric field never invents an error', function () {
+	// rmempty is true on these fields; a blank means "use the daemon default",
+	// so a half-filled trio must stay valid rather than block the save.
+	assert.strictEqual(mod.checkRateOrder('', 5000, ''), null);
+	assert.strictEqual(mod.checkRateOrder(null, null, null), null);
+	assert.strictEqual(mod.checkRateOrder(undefined, 5000, 40000), null);
+	assert.strictEqual(mod.checkRateOrder('abc', 5000, 40000), null);
+	assert.strictEqual(mod.checkRateOrder('  ', '  ', '  '), null);
+});
+
+test('checkRateOrder: covers both directions via RATE_TRIOS metadata', function () {
+	const names = mod.OPTIONS.map(function (o) { return o.name; });
+	assert.strictEqual(mod.RATE_TRIOS.length, 2);
+	mod.RATE_TRIOS.forEach(function (t) {
+		[t.min, t.base, t.max].forEach(function (n) {
+			assert.ok(names.indexOf(n) !== -1, n + ' must be a real option');
+		});
+	});
+});
+
+/* --- instanceNameSuggestions: "Add instance" datalist ---------------------- */
+
+test('instanceNameSuggestions: sanitizes devices UCI would reject', function () {
+	assert.deepStrictEqual(
+		mod.instanceNameSuggestions(['pppoe-wan', 'eth0.2', 'wan.835'], []),
+		['pppoe_wan', 'eth0_2', 'wan_835']);
+});
+
+test('instanceNameSuggestions: drops names already configured', function () {
+	assert.deepStrictEqual(mod.instanceNameSuggestions(['eth1', 'eth2'], ['eth1']), ['eth2']);
+});
+
+test('instanceNameSuggestions: dedupes collisions after sanitizing', function () {
+	assert.deepStrictEqual(mod.instanceNameSuggestions(['eth0.2', 'eth0-2'], []), ['eth0_2']);
+});
+
+test('instanceNameSuggestions: no SQM means no suggestions, not a bad list', function () {
+	assert.deepStrictEqual(mod.instanceNameSuggestions([], []), []);
+	assert.deepStrictEqual(mod.instanceNameSuggestions(undefined, undefined), []);
+	assert.deepStrictEqual(mod.instanceNameSuggestions(['---'], []), []);
+});
+
 console.log('\n' + passed + ' tests passed');

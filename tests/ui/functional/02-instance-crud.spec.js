@@ -6,12 +6,12 @@
  * Persistence is asserted across a FULL page reload (the values must have been
  * committed to UCI, not merely staged in the browser).
  */
-const { test, expect } = require('../fixtures/luci');
+const { test, expect, luciBeforeEach } = require('../fixtures/luci');
 const {
   waitForConfigForm, addInstance, saveApply, deleteInstance, setValue, valueInput,
 } = require('./helpers');
 
-test.beforeEach(require('../fixtures/luci').luciBeforeEach);
+test.beforeEach(luciBeforeEach);
 
 const INST = 'uitest';
 const BASE_DL = '12345';

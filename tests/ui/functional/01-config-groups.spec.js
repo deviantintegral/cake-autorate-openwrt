@@ -8,10 +8,10 @@
  *  - The search box (input#cake-autorate-filter) hides non-matching option rows
  *    and clearing it restores them.
  */
-const { test, expect } = require('../fixtures/luci');
+const { test, expect, luciBeforeEach } = require('../fixtures/luci');
 const { waitForConfigForm, activateTab } = require('./helpers');
 
-test.beforeEach(require('../fixtures/luci').luciBeforeEach);
+test.beforeEach(luciBeforeEach);
 
 // One representative UCI option per documented group (from options.js).
 const GROUPS = [

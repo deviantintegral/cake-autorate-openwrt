@@ -74,11 +74,37 @@ function humanize(name) {
 	}).join(' ');
 }
 
+/*
+ * The visible help for one option: prose plus its unit/range hint.
+ *
+ * Deliberately does NOT print the UCI key. No LuCI application in the feed does
+ * that, including luci-app-sqm -- the closest analogue, which also wraps a
+ * documented shaper and still writes "Latency target (ingress)" rather than
+ * exposing `itarget`. Repeating the key on all 66 rows is noise, and the key
+ * stays reachable anyway: the search box matches UCI names (optionMatches), and
+ * every row carries data-name="<uci_option>" in the DOM.
+ */
 function describe(opt) {
 	var d = opt.desc;
 	if (opt.units)
 		d += '  —  ' + opt.units;
-	return d + '  ·  ' + _('UCI key') + ': ' + opt.name;
+	return d;
+}
+
+/*
+ * Turn a checkRateOrder() code into a sentence that names the two fields in the
+ * words the form uses, states the rule, and shows the values that broke it.
+ */
+function rateOrderMessage(dir, err) {
+	var d = (dir === 'dl') ? _('download') : _('upload');
+	switch (err.code) {
+		case 'min-gt-base':
+			return _('Minimum %s rate (%d) must not exceed the base rate (%d).').format(d, err.a, err.b);
+		case 'max-lt-base':
+			return _('Maximum %s rate (%d) must not be below the base rate (%d).').format(d, err.a, err.b);
+		default:
+			return _('Minimum %s rate (%d) must not exceed the maximum rate (%d).').format(d, err.a, err.b);
+	}
 }
 
 /* A tab description node with an optional upstream documentation link. */
@@ -194,6 +220,61 @@ return view.extend({
 		s.addremove = true;
 		s.addbtntitle = _('Add instance');
 
+		/*
+		 * "Add instance" stays a TEXT field with suggestions rather than becoming a
+		 * dropdown, for three reasons:
+		 *   1. The id must be a UCI section name ([a-zA-Z0-9_]+), but real WAN
+		 *      devices are routinely pppoe-wan / eth0.2 / wan.835 -- a dropdown of
+		 *      live interfaces would offer names UCI then rejects.
+		 *   2. The id is a free-form label naming the daemon config, log file and
+		 *      service; a closed list would block legitimate names (starlink,
+		 *      backup_lte) and there is no 1:1 interface->instance mapping anyway,
+		 *      since an instance carries dl_if AND ul_if as options.
+		 *   3. It matches the feed: the apps that override renderSectionAdd
+		 *      (mwan3, libreswan, strongswan-swanctl, xfrpc) all AUGMENT the name
+		 *      input with validators; none swap it for a select.
+		 * So: native <datalist> suggestions derived from the SQM egress devices,
+		 * plus a validator that explains the naming rule and catches duplicates.
+		 */
+		s.renderSectionAdd = function (extra_class) {
+			var el = form.TypedSection.prototype.renderSectionAdd.apply(this, arguments);
+			var nameEl = el.querySelector('.cbi-section-create-name');
+			if (!nameEl)
+				return el;
+
+			var suggestions = options.instanceNameSuggestions(ifChoices.ul, this.cfgsections());
+			if (suggestions.length) {
+				var listId = 'cake-autorate-instance-names';
+				el.appendChild(E('datalist', { 'id': listId },
+					suggestions.map(function (n) { return E('option', { 'value': n }); })));
+				nameEl.setAttribute('list', listId);
+				nameEl.setAttribute('placeholder', _('e.g. %s').format(suggestions[0]));
+			}
+			else {
+				nameEl.setAttribute('placeholder', _('e.g. wan'));
+			}
+
+			/*
+			 * A SECOND validator on the same input. ui.addValidator attaches
+			 * listeners rather than replacing, so the base one (which enables the
+			 * Add button and enforces the uciname character set) keeps working and
+			 * this one adds the check it cannot make: a name already in use.
+			 * Bad characters are left to the 'uciname' type -- its assert runs
+			 * before this callback, so a message here would never be reached, and
+			 * LuCI's standard wording is what users see across every other app.
+			 * Marking the field invalid is enough to block creation: the base Add
+			 * handler bails on a field carrying .cbi-input-invalid.
+			 */
+			var section = this;
+			ui.addValidator(nameEl, 'uciname', true, function (v) {
+				if (v !== '' && section.cfgsections().indexOf(v) !== -1)
+					return _('An instance named "%s" already exists.').format(v);
+				return true;
+			}, 'blur', 'keyup');
+
+			return el;
+		};
+
 		TABS.forEach(function (t) {
 			s.tab(t.id, t.title, tabDescr(t));
 		});
@@ -201,12 +282,15 @@ return view.extend({
 		/* Package-local procd gate -- NOT one of the 66 upstream options and
 		 * never written into the daemon config; leads the Essentials tab. */
 		var en = s.taboption('essentials', form.Flag, 'enabled', _('Enabled'),
-			_('Master switch for this instance (procd). Turn on once the interfaces and rates are correct for your line.') + '  ·  ' + _('UCI key') + ': enabled');
+			_('Master switch for this instance (procd). Turn on once the interfaces and rates are correct for your line.'));
 		en.rmempty = false;
 
 		/* dl_if / ul_if options, captured so the post-render pass can seed their
 		 * warnings for every existing section. */
 		var ifOpts = {};
+		/* Every generated option, so the shaper-rate trios can be wired up after
+		 * the loop (a trio needs all three members to exist first). */
+		var rateOpts = {};
 
 		/* Generate one field per upstream option by iterating the metadata, so
 		 * "rendered fields" == options.OPTIONS by construction. */
@@ -252,6 +336,49 @@ return view.extend({
 			/* String options whose upstream default is empty may be blanked;
 			 * everything else keeps its packaged/upstream default when omitted. */
 			o.rmempty = true;
+			rateOpts[opt.name] = o;
+		});
+
+		/* Enforce the min <= base <= max ordering the Essentials help promises.
+		 * A datatype is per-field and cannot express a relation between fields, so
+		 * without this the form happily saved min > base and the daemon inherited a
+		 * nonsensical config. Attached to all six fields so the error appears on
+		 * whichever one the user is editing; returning a string makes LuCI show it
+		 * under the field and refuse the save. */
+		options.RATE_TRIOS.forEach(function (trio) {
+			var members = [trio.min, trio.base, trio.max];
+
+			members.forEach(function (name) {
+				var o = rateOpts[name];
+				if (!o)
+					return;
+
+				o.validate = function (section_id, value) {
+					var self = this;
+					function other(n) {
+						/* The field being edited is authoritative from `value`;
+						 * siblings come from their live widget state. */
+						if (n === name)
+							return value;
+						var found = self.map.lookupOption(n, section_id);
+						return (found && found[0]) ? found[0].formvalue(section_id) : null;
+					}
+					var err = options.checkRateOrder(other(trio.min), other(trio.base), other(trio.max));
+					return err ? rateOrderMessage(trio.dir, err) : true;
+				};
+
+				/* Re-validate the siblings too: fixing `base` must clear a stale
+				 * error still shown on `min`, which only re-checks itself. */
+				o.onchange = function (ev, section_id) {
+					members.forEach(function (n) {
+						if (n === name)
+							return;
+						var found = this.map.lookupOption(n, section_id);
+						if (found && found[0])
+							found[0].triggerValidation(section_id);
+					}, this);
+				};
+			});
 		});
 
 		return m.render().then(function (mapEl) {
@@ -296,7 +423,10 @@ return view.extend({
 				'id': 'cake-autorate-filter',
 				'type': 'search',
 				'class': 'cbi-input-text',
-				'placeholder': _('Filter options by name, e.g. "shaper" or "reflector"…'),
+				/* Names the UCI-option search explicitly: it is how someone
+				 * following the upstream docs maps a config key to its field now
+				 * that the key is no longer printed on every row. */
+				'placeholder': _('Search titles and UCI option names, e.g. "shaper" or "owd_delta"…'),
 				'autocomplete': 'off',
 				'keyup': function (ev) { applyFilter(mapEl, statusEl, ev.target.value); },
 				'search': function (ev) { applyFilter(mapEl, statusEl, ev.target.value); }

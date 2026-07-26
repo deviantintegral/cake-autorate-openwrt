@@ -6,13 +6,13 @@
  * Validity is proven by a real page reload: the instance and every essentials
  * value persist, which means a well-formed UCI section was committed.
  */
-const { test, expect } = require('../fixtures/luci');
+const { test, expect, luciBeforeEach } = require('../fixtures/luci');
 const {
   waitForConfigForm, addInstance, saveApply, deleteInstance,
   setCombo, comboValue, setValue, valueInput,
 } = require('./helpers');
 
-test.beforeEach(require('../fixtures/luci').luciBeforeEach);
+test.beforeEach(luciBeforeEach);
 
 const INST = 'essonly';
 
@@ -47,8 +47,11 @@ test.describe('cake-autorate config: essentials-only', () => {
     await expect(page.locator(`#cbi-cake-autorate-${INST}`)).toBeVisible();
     await expect(valueInput(page, INST, 'base_dl_shaper_rate_kbps')).toHaveValue('5000');
     await expect(valueInput(page, INST, 'max_ul_shaper_rate_kbps')).toHaveValue('20000');
-    expect(await comboValue(page, INST, 'dl_if')).toBe('ifb4eth1');
-    expect(await comboValue(page, INST, 'ul_if')).toBe('eth1');
+    // expect.poll (not `expect(await ...)`) so these retry like every other
+    // assertion here -- the dropdown's selected <li> is set during LuCI's
+    // client-side hydration, which can land after the row is first visible.
+    await expect.poll(() => comboValue(page, INST, 'dl_if')).toBe('ifb4eth1');
+    await expect.poll(() => comboValue(page, INST, 'ul_if')).toBe('eth1');
 
     // Clean up so reruns start fresh.
     await deleteInstance(page, INST);

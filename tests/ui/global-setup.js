@@ -40,6 +40,27 @@ function writeState(obj) {
   fs.writeFileSync(STATE_FILE, JSON.stringify(obj, null, 2));
 }
 
+/*
+ * Record "no live LuCI" and decide whether that is a SKIP or a hard FAILURE.
+ *
+ * A runner without KVM legitimately cannot boot the VM, and there the specs
+ * self-skip so the pipeline stays green-or-skipped. But when the caller has
+ * declared CA_IT_REQUIRE_KVM=1 (as CI does) it is asserting that a live run MUST
+ * happen -- so any reason the endpoint failed to come up (no KVM, missing apks,
+ * a boot error) has to fail the run. Without this, an infra breakage silently
+ * skips every spec and the suite still exits 0, which reads exactly like a pass.
+ */
+function unavailable(state, message) {
+  writeState({ available: false, external: false, serve_log: SERVE_LOG, ...state });
+  if (process.env.CA_IT_REQUIRE_KVM === '1') {
+    throw new Error(
+      `[global-setup] CA_IT_REQUIRE_KVM=1 but no live LuCI came up: ${state.reason}\n`
+      + `${message}\n`
+      + `Refusing to skip -- a required live run must fail loudly, not report success.`);
+  }
+  console.warn(message);
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -116,13 +137,9 @@ module.exports = async function globalSetup() {
       // run.sh finished without ever signalling ready: no KVM, or an infra
       // error. Treat as "no live LuCI" -> specs skip. Details are in serve.log.
       const tail = safeTail(SERVE_LOG);
-      writeState({
-        available: false,
-        external: false,
-        reason: `serve process exited (code=${exitCode}) before LuCI was ready`,
-        serve_log: SERVE_LOG,
-      });
-      console.warn(`[global-setup] serve exited early (code=${exitCode}); `
+      unavailable(
+        { reason: `serve process exited (code=${exitCode}) before LuCI was ready` },
+        `[global-setup] serve exited early (code=${exitCode}); `
         + `UI specs will SKIP. Tail of ${SERVE_LOG}:\n${tail}`);
       return;
     }
@@ -131,16 +148,13 @@ module.exports = async function globalSetup() {
 
   // Timed out waiting for readiness. Signal a stop and record unavailability.
   try { fs.writeFileSync(STOP_FILE, 'timeout'); } catch (_e) { /* ignore */ }
-  writeState({
-    available: false,
-    external: false,
-    reason: `timed out after ${READY_TIMEOUT_MS} ms waiting for LuCI`,
-    launcher_pid: child.pid,
-    stop_file: STOP_FILE,
-    serve_log: SERVE_LOG,
-  });
-  console.warn(`[global-setup] timed out waiting for LuCI; UI specs will SKIP. `
-    + `See ${SERVE_LOG}`);
+  unavailable(
+    {
+      reason: `timed out after ${READY_TIMEOUT_MS} ms waiting for LuCI`,
+      launcher_pid: child.pid,
+      stop_file: STOP_FILE,
+    },
+    `[global-setup] timed out waiting for LuCI; UI specs will SKIP. See ${SERVE_LOG}`);
 };
 
 function safeTail(file, n = 40) {

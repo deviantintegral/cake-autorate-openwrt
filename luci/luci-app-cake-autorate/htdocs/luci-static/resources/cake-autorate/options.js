@@ -238,6 +238,78 @@ function optionMatches(query, name, title) {
 }
 
 /*
+ * RATE_TRIOS -- the two min/base/max shaper-rate groups whose ORDERING the
+ * Essentials help text promises ("must be <= base", "between min and max",
+ * ">= base"). Per-field datatypes cannot express a cross-field relation, so the
+ * view attaches checkRateOrder() to all six fields to actually enforce it.
+ */
+var RATE_TRIOS = [
+	{ dir: 'dl', min: 'min_dl_shaper_rate_kbps', base: 'base_dl_shaper_rate_kbps', max: 'max_dl_shaper_rate_kbps' },
+	{ dir: 'ul', min: 'min_ul_shaper_rate_kbps', base: 'base_ul_shaper_rate_kbps', max: 'max_ul_shaper_rate_kbps' }
+];
+
+function rateNum(v) {
+	if (v == null)
+		return null;
+	var s = String(v).trim();
+	if (s === '' || !isFinite(Number(s)))
+		return null;
+	return Number(s);
+}
+
+/*
+ * checkRateOrder(min, base, max) -- pure. Returns null when the trio is
+ * consistent, else { code, a, b } naming the violated relation and the two
+ * offending values. The view turns `code` into a localized sentence.
+ *
+ * Any field may be empty (rmempty: the daemon then applies its own default), so
+ * a pair is only compared when BOTH of its values parse as numbers -- an
+ * unfilled field must never manufacture an error.
+ */
+function checkRateOrder(min, base, max) {
+	var m = rateNum(min), b = rateNum(base), x = rateNum(max);
+
+	if (m !== null && b !== null && m > b)
+		return { code: 'min-gt-base', a: m, b: b };
+	if (x !== null && b !== null && x < b)
+		return { code: 'max-lt-base', a: x, b: b };
+	if (m !== null && x !== null && m > x)
+		return { code: 'min-gt-max', a: m, b: x };
+	return null;
+}
+
+/*
+ * instanceNameSuggestions(egressChoices, existingNames) -- pure. Candidate
+ * instance ids for the "Add instance" field, derived from the SQM egress devices
+ * (one cake-autorate instance manages one WAN, so the WAN is the natural name).
+ *
+ * A UCI section name must match [a-zA-Z0-9_]+, but real WAN devices frequently
+ * do not -- `pppoe-wan`, `eth0.2`, `wan.835`. Offering those verbatim would
+ * suggest names UCI then rejects, so each is sanitized to a valid identifier and
+ * anything already configured is dropped. Returns [] when SQM is absent, which
+ * is the signal to offer no suggestions at all rather than a misleading list.
+ */
+function instanceNameSuggestions(egressChoices, existingNames) {
+	var used = {};
+	(Array.isArray(existingNames) ? existingNames : []).forEach(function (n) {
+		used[String(n)] = true;
+	});
+
+	var seen = {}, out = [];
+	(Array.isArray(egressChoices) ? egressChoices : []).forEach(function (dev) {
+		var id = String(dev == null ? '' : dev)
+			.replace(/[^a-zA-Z0-9_]+/g, '_')
+			.replace(/_+/g, '_')
+			.replace(/^_|_$/g, '');
+		if (id === '' || used[id] || seen[id])
+			return;
+		seen[id] = true;
+		out.push(id);
+	});
+	return out;
+}
+
+/*
  * datatypeFor(opt) -- pure. Maps a metadata entry to a LuCI datatype string,
  * composing sign/format (uinteger/ufloat) with any lo/hi bounds. Bounds are a
  * client-side UX aid only; the config bridge (task 4) is the authority on
@@ -266,5 +338,8 @@ return baseclass.extend({
 	TOTAL_OPTIONS: TOTAL_OPTIONS,
 	coverageReport: coverageReport,
 	optionMatches: optionMatches,
-	datatypeFor: datatypeFor
+	datatypeFor: datatypeFor,
+	RATE_TRIOS: RATE_TRIOS,
+	checkRateOrder: checkRateOrder,
+	instanceNameSuggestions: instanceNameSuggestions
 });

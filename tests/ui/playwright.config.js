@@ -42,11 +42,19 @@ module.exports = defineConfig({
     //  - scale css              -> device-independent pixels (we already pin DSR=1);
     //  - a tiny pixel tolerance -> absorbs sub-pixel font AA jitter between two
     //    independent VM boots without hiding real structural change.
+    //
+    // The tolerance was 0.02, which is not "tiny": 2% of a 1280x900 page is
+    // ~23,000 pixels, and a line of text is ~3,000. It hid a real change --
+    // rewording the filter placeholder left `config-empty` reporting a match, so
+    // --update-snapshots did not rewrite it and the committed baseline went
+    // stale. 0.002 still absorbs anti-aliasing jitter across two independent VM
+    // boots (verified by regenerating every baseline on one boot and passing
+    // them on the next) while a changed line of text now fails.
     toHaveScreenshot: {
       animations: 'disabled',
       caret: 'hide',
       scale: 'css',
-      maxDiffPixelRatio: 0.02,
+      maxDiffPixelRatio: 0.002,
     },
   },
 
