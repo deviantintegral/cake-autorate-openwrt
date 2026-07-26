@@ -130,15 +130,35 @@ class Harness:
                      "MOUNTED=" in out, out.strip())
 
     def wait_for_net(self):
-        self.log("== waiting for WAN/internet ==")
+        """Wait until the guest can reach the package repo.
+
+        Probed over HTTP, NOT with ping. What this gates is `apk install`, which
+        needs TCP; ICMP to the public internet is a proxy that can be false while
+        the real thing works. It is false on GitHub-hosted runners specifically:
+        they run on Azure, which drops outbound ICMP echo regardless of
+        net.ipv4.ping_group_range, so a ping probe reported "guest has no
+        internet" on a guest whose TCP was fine and failed both VM jobs.
+
+        This does NOT weaken the ICMP coverage. The reflectors cake-autorate
+        actually measures against are the SLIRP gateways 10.0.2.2 / 10.0.3.2,
+        which QEMU answers itself and which assert_reflectors() checks directly
+        -- so the fping path is still proven, just not against the internet.
+        """
+        self.log("== waiting for WAN/internet (HTTP) ==")
+        url = "http://downloads.openwrt.org/releases/"
+        # uclient-fetch is the OpenWrt default; busybox wget is the fallback for
+        # an image built without it. Both accept -T (timeout) and -O.
+        probe = ("if uclient-fetch -q -T 5 -O /dev/null %s 2>/dev/null || "
+                 "wget -q -T 5 -O /dev/null %s 2>/dev/null; "
+                 "then echo NETOK; else echo NETNO; fi" % (url, url))
         ok = False
         for i in range(30):
-            rc, out = self.g("ping -c1 -W2 downloads.openwrt.org >/dev/null 2>&1 && echo NETOK || echo NETNO", t=20)
+            rc, out = self.g(probe, t=25)
             if "NETOK" in out:
                 ok = True
                 break
             time.sleep(2)
-        self.A.check("net: guest reaches downloads.openwrt.org (for apk)", ok)
+        self.A.check("net: guest reaches downloads.openwrt.org over HTTP (for apk)", ok)
         return ok
 
     def install(self):
