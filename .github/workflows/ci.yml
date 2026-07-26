@@ -238,6 +238,16 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm || true
 
+      # QEMU user-mode networking sends guest ICMP through a Linux ping socket,
+      # which the kernel restricts to GIDs inside net.ipv4.ping_group_range.
+      # Hosted runners ship "1 0" -- an empty range -- so the guest boots and
+      # then cannot ping at all: no route to downloads.openwrt.org for apk, and
+      # no OWD measurement for cake-autorate's fping. run.sh gates on this too.
+      - name: Allow unprivileged ICMP for QEMU user-mode networking
+        run: |
+          sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+          cat /proc/sys/net/ipv4/ping_group_range
+
       - name: Detect /dev/kvm
         id: kvm
         run: |
@@ -326,7 +336,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils e2fsprogs python3 wget gzip
 
-      # See the identical step in `integration` for why this rule is needed.
+      # See the identical steps in `integration` for why these are needed: the
+      # udev rule makes /dev/kvm writable, the sysctl lets QEMU's user-mode
+      # networking send guest ICMP (without it the serve VM never gets online
+      # and global-setup fails the whole suite).
       - name: Grant the runner access to /dev/kvm
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -334,6 +347,11 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm || true
+
+      - name: Allow unprivileged ICMP for QEMU user-mode networking
+        run: |
+          sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+          cat /proc/sys/net/ipv4/ping_group_range
 
       - name: Install Playwright + Chromium
         working-directory: tests/ui

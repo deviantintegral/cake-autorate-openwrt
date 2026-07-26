@@ -79,9 +79,27 @@ failure).
 
 ### Requirements and the no-KVM skip
 
-Needs `qemu-system-x86_64` + **`/dev/kvm`** (user in the `kvm` group),
-`python3` (stdlib only), `qemu-img`, `mkfs.ext4`, and outbound internet to
-`downloads.openwrt.org`. If `/dev/kvm` or QEMU is missing, `run.sh` prints
+Needs `qemu-system-x86_64` + **`/dev/kvm`** (readable *and writable* by you —
+group membership alone is not enough if the node is `0660` and you are not in
+`kvm`), `python3` (stdlib only), `qemu-img`, `mkfs.ext4`, and outbound internet
+to `downloads.openwrt.org`.
+
+It also needs **unprivileged ICMP** to be permitted:
+
+```sh
+sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+```
+
+QEMU's user-mode networking sends guest ICMP through a Linux ping socket, which
+the kernel grants only to GIDs inside `net.ipv4.ping_group_range`. Several
+distros and *every* GitHub-hosted runner ship `1 0` — an empty range. Without
+this the guest boots fine and then has no working ping: the harness cannot reach
+`downloads.openwrt.org` to `apk install`, and cake-autorate cannot measure OWD
+with `fping`, so the shaping assertions are meaningless. `run.sh` checks this up
+front and exits 3 with the command above rather than letting it surface two
+minutes later as a confusing "guest has no internet".
+
+If `/dev/kvm` or QEMU is missing, `run.sh` prints
 
 ```
 INTEGRATION_SKIPPED: no KVM
@@ -182,7 +200,10 @@ with three jobs:
 | **ui** | `needs: build`; runs the functional + visual Playwright suites and publishes the review gallery. | `ui-playwright-report`, `ui-gallery` |
 
 KVM policy: GitHub-hosted `ubuntu-*` runners expose `/dev/kvm`, so the VM-backed
-steps run for real. A runner without KVM **skips them visibly** (a `::warning`
+steps run for real — but only after the workflow fixes up two host defaults that
+would otherwise break the VM jobs: `/dev/kvm` ships as `root:kvm 0660` (a udev
+rule makes it `0666`), and `net.ipv4.ping_group_range` ships as the empty range
+`1 0` (a sysctl opens it so guest ICMP works at all). A runner without KVM **skips them visibly** (a `::warning`
 annotation + a job-summary line) — never a silent green pass — while `build` and
 the gallery still publish so a KVM-less runner yields signal. The **visual diff
 is advisory** (baselines are environment-specific for fonts/GPU): CI uploads the

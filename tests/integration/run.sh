@@ -64,6 +64,40 @@ if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ] || ! qemu-system-x86_64 --version >/de
 	exit 0
 fi
 
+# ---- guest-ICMP gate ------------------------------------------------------
+# QEMU user-mode networking implements guest ICMP with a Linux ping socket, and
+# the kernel only hands those out to GIDs inside net.ipv4.ping_group_range. The
+# default on a stock GitHub-hosted runner is "1 0" -- an EMPTY range -- so the
+# guest boots normally and then cannot ping anything at all.
+#
+# This matters twice over: the harness waits on the guest reaching
+# downloads.openwrt.org before it can `apk install`, and cake-autorate itself
+# measures one-way delay with fping. Without ICMP the run dies ~2 minutes in
+# with a bare "guest has no internet", which points at the network rather than
+# at the one sysctl that actually explains it. Fail here instead, with the fix.
+#
+# Root is exempt: it holds CAP_NET_RAW, so QEMU uses a raw socket regardless.
+#
+# Parsed with awk, NOT `read`: the two values are TAB-separated and dash's read
+# does not split them the way bash's does (it yields an empty second field), so
+# a `read`-based gate silently never fires -- on precisely the dash-as-/bin/sh
+# runners this exists to protect. Empty/unparseable values skip the gate rather
+# than block a run.
+if [ "$(id -u)" != 0 ] && [ -r /proc/sys/net/ipv4/ping_group_range ]; then
+	PGR_LO=$(awk '{print $1; exit}' /proc/sys/net/ipv4/ping_group_range)
+	PGR_HI=$(awk '{print $2; exit}' /proc/sys/net/ipv4/ping_group_range)
+	MY_GID=$(id -g)
+	if [ -n "$PGR_LO" ] && [ -n "$PGR_HI" ] &&
+		{ [ "$MY_GID" -lt "$PGR_LO" ] || [ "$MY_GID" -gt "$PGR_HI" ]; }; then
+		echo "ERROR: this user's GID ($MY_GID) is outside net.ipv4.ping_group_range" >&2
+		echo "       ($PGR_LO $PGR_HI), so QEMU user-mode networking cannot send guest" >&2
+		echo "       ICMP -- the guest would appear to have no internet and cake-autorate" >&2
+		echo "       could not measure OWD. Fix with:" >&2
+		echo "         sudo sysctl -w net.ipv4.ping_group_range=\"0 2147483647\"" >&2
+		exit 3
+	fi
+fi
+
 # ---- locate build tools ---------------------------------------------------
 PATH="$PATH:/usr/sbin:/sbin"
 MKFS_EXT4=$(command -v mkfs.ext4 || echo /usr/sbin/mkfs.ext4)
