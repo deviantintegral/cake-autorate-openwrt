@@ -84,12 +84,29 @@ wget "https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/$SDK.tar.zst
 tar --use-compress-program=unzstd -xf "$SDK.tar.zst"
 cd "$SDK"
 
-# 2. Register THIS repo as a src-link feed named "cakeautorate".
-echo "src-link cakeautorate /path/to/cake-autorate-openwrt" > feeds.conf.default
-./scripts/feeds update cakeautorate
-./scripts/feeds install -p cakeautorate -a
+# 2. Add THIS repo as a src-link feed named "cakeautorate" -- APPEND it to the
+#    feed list the SDK ships. Overwriting feeds.conf.default drops the pinned
+#    `luci` feed, and luci-app-cake-autorate includes feeds/luci/luci.mk, so the
+#    LuCI package then fails with "No rule to make target .../luci.mk".
+cp feeds.conf.default feeds.conf
+echo "src-link cakeautorate /path/to/cake-autorate-openwrt" >> feeds.conf
+# `base` is needed too, not just `luci`: the SDK ships only package/kernel and
+# package/toolchain, so luci-base's own C dependencies (liblua, libucode,
+# libubox, libubus, libnl-tiny, rpcd, iwinfo) all come from the base feed.
+# Without it the build stops at lucihttp with "fatal error: lua.h".
+./scripts/feeds update base luci cakeautorate
+# `install -a` (not `-p cakeautorate`): -p installs only our own feed's
+# packages, leaving luci-base's dependencies unresolved. This just creates
+# symlinks -- the compile steps below still build only our two packages and
+# their actual dependency chain.
+./scripts/feeds install -a
 
-# 3. Minimal .config (avoid CONFIG_ALL — no kernel build required).
+# 3. Select the two packages. Skipping the `packages` feed keeps this quick;
+#    cake-autorate's remaining runtime deps -- bash, fping, sqm-scripts,
+#    collectd-mod-exec -- are recorded in the .apk regardless and are resolved
+#    by apk on the router at install time. They show up as "has a dependency on
+#    X, which does not exist" warnings here, which are expected and harmless.
+#    Run `./scripts/feeds update -a` instead if you want them at build time.
 {
   echo "CONFIG_PACKAGE_cake-autorate=m"
   echo "CONFIG_PACKAGE_luci-app-cake-autorate=m"

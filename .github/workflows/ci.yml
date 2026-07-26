@@ -23,8 +23,13 @@
 # your runner label (e.g. [self-hosted, kvm]). The KVM-detection steps below then
 # see /dev/kvm and run the VM for real with no other edits.
 #
-# NOTE: this repo has no git remote yet; the workflow cannot execute until it is
-# pushed to GitHub (documented as a prerequisite in the task-14 testing doc).
+# Feed policy: the SDK ships a feeds.conf.default that pins every upstream feed
+# (base, packages, luci, routing, telephony, video) to an exact 25.12.5 commit.
+# This workflow APPENDS its own src-link to that file rather than replacing it --
+# luci-app-cake-autorate's Makefile does `include $(TOPDIR)/feeds/luci/luci.mk`,
+# so without the luci feed the app cannot build at all. Only the feeds that are
+# actually needed get `feeds update`d; see the feed step for why the rest are
+# deliberately left alone.
 
 name: CI
 
@@ -65,7 +70,14 @@ jobs:
             gettext git libncurses-dev libssl-dev python3 python3-setuptools \
             rsync unzip zlib1g-dev file wget zstd
 
-      - name: Cache SDK download + dl/ + build_dir
+      # Cache ONLY the SDK archive and the package downloads.
+      #
+      # build_dir is deliberately NOT cached. The SDK tarball already ships a
+      # prebuilt kernel tree (~12.8k files, .ko included), so a cached build_dir
+      # would mostly duplicate what the archive restores anyway; what it would
+      # actually save is the per-run kmod .apk packaging, and several GB of
+      # poorly-compressing cache traffic costs more than it saves.
+      - name: Cache SDK archive + package downloads
         uses: actions/cache@v4
         with:
           # Bust the cache when the SDK pin or either package Makefile changes.
@@ -74,12 +86,11 @@ jobs:
             owrt-${{ env.OWRT_VERSION }}-
           path: |
             ~/sdk-cache
-            ${{ github.workspace }}/sdk/dl
-            ${{ github.workspace }}/sdk/build_dir
+            ~/owrt-dl
 
       - name: Download + extract the 25.12.5 SDK
         run: |
-          mkdir -p ~/sdk-cache
+          mkdir -p ~/sdk-cache ~/owrt-dl
           if [ ! -f ~/sdk-cache/"$SDK_ARCHIVE" ]; then
             echo "== fetching $SDK_ARCHIVE =="
             wget -q -O ~/sdk-cache/"$SDK_ARCHIVE" "$SDK_URL_DIR/$SDK_ARCHIVE"
@@ -91,19 +102,63 @@ jobs:
           tar --use-compress-program=unzstd \
             -xf ~/sdk-cache/"$SDK_ARCHIVE" \
             -C "$GITHUB_WORKSPACE/sdk" --strip-components=1
+          # Point dl/ at the cached copy. It has to live outside the SDK tree:
+          # the cache is restored BEFORE this step, and the `rm -rf` above would
+          # otherwise delete whatever was restored into it -- which is exactly
+          # why the previous dl//build_dir caching never saved any work.
+          # Symlinking dl/ to a shared directory is standard OpenWrt practice.
+          rm -rf "$GITHUB_WORKSPACE/sdk/dl"
+          ln -s ~/owrt-dl "$GITHUB_WORKSPACE/sdk/dl"
 
       - name: Register this repo as the `cakeautorate` src-link feed
         working-directory: ${{ github.workspace }}/sdk
         run: |
-          # Point the feed at the checked-out repo (contains net/ + luci/).
-          echo "src-link cakeautorate $GITHUB_WORKSPACE" > feeds.conf.default
-          cat feeds.conf.default
-          ./scripts/feeds update cakeautorate
-          ./scripts/feeds install -p cakeautorate -a
+          # APPEND to the shipped feed list; do NOT overwrite it. Replacing
+          # feeds.conf.default with just our own src-link deleted the pinned
+          # `luci` feed, and luci-app-cake-autorate/Makefile includes
+          # $(TOPDIR)/feeds/luci/luci.mk -- so the build died with
+          # "No rule to make target '.../feeds/luci/luci.mk'".
+          cp feeds.conf.default feeds.conf
+          echo "src-link cakeautorate $GITHUB_WORKSPACE" >> feeds.conf
+          cat feeds.conf
+          # `base` AND `luci` are both required, and neither is optional:
+          #   luci -> luci.mk, luci-base, luci-app-statistics
+          #   base -> the C libraries luci-base itself pulls in (liblua,
+          #           libucode, libubox, libubus, libnl-tiny, rpcd, iwinfo).
+          #           Without it lucihttp dies on a missing <lua.h>.
+          # The SDK ships only package/kernel + package/toolchain, so ALL base
+          # userland comes from this feed.
+          #
+          # `packages`/`routing`/`telephony`/`video` stay un-updated on purpose:
+          # cake-autorate's remaining runtime deps (bash, fping, sqm-scripts,
+          # collectd-mod-exec) are written into the .apk metadata whether or not
+          # they exist at build time -- verified: the produced apk records
+          # "depends: libc bash fping tc-tiny kmod-sched-cake sqm-scripts
+          # collectd-mod-exec" -- and apk resolves them from the official repos
+          # on the device. The integration job proves that for real in a VM,
+          # which beats a build-time presence check, and pulling `packages` in
+          # would add a from-source collectd + rrdtool build for no new signal.
+          # Their "which does not exist" warnings during this step are expected.
+          ./scripts/feeds update base luci cakeautorate
+          # `install -a`, not `-a -p cakeautorate`: -p restricts installation to
+          # our own feed, which leaves luci-base's dependencies un-symlinked into
+          # package/feeds/ and the build fails to resolve them. Installing
+          # everything only creates symlinks -- `make package/<x>/compile` still
+          # builds nothing but <x> and its actual dependency chain.
+          ./scripts/feeds install -a
 
-      - name: Configure a MINIMAL build (avoid CONFIG_ALL — no kernel build)
+      - name: Configure the build
         working-directory: ${{ github.workspace }}/sdk
         run: |
+          # Select our two packages and let defconfig resolve the rest.
+          #
+          # This step used to claim it avoided CONFIG_ALL. It does not: defconfig
+          # sets CONFIG_ALL / ALL_KMODS / ALL_NONSHARED=y no matter what is
+          # written here, so ~1160 kmods end up selected and building
+          # cake-autorate (via its +kmod-sched-cake dep) packages every one of
+          # them into an .apk -- a few minutes per run. Writing explicit
+          # "# CONFIG_PACKAGE_kmod-... is not set" lines does NOT survive
+          # defconfig (verified), so this cost is accepted rather than fought.
           {
             echo "CONFIG_PACKAGE_cake-autorate=m"
             echo "CONFIG_PACKAGE_luci-app-cake-autorate=m"
@@ -172,15 +227,30 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils e2fsprogs python3 wget gzip
 
+      # /dev/kvm exists on hosted ubuntu-* runners but is root:kvm 0660 and the
+      # runner user is not in the kvm group, so QEMU gets EACCES. This is the
+      # standard udev rule for it (same one the Android emulator actions use).
+      - name: Grant the runner access to /dev/kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm || true
+
       - name: Detect /dev/kvm
         id: kvm
         run: |
-          if [ -e /dev/kvm ] && qemu-system-x86_64 --version >/dev/null 2>&1; then
+          # Test READ/WRITE, not mere existence: an unwritable /dev/kvm passes a
+          # `-e` check and then fails inside QEMU, which under
+          # CA_IT_REQUIRE_KVM=1 turns an environment problem into a hard failure
+          # instead of the visible skip this job is designed to produce.
+          if [ -r /dev/kvm ] && [ -w /dev/kvm ] && qemu-system-x86_64 --version >/dev/null 2>&1; then
             echo "available=true" >> "$GITHUB_OUTPUT"
             echo "KVM available — integration harness will run for real."
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=Integration skipped (no KVM)::/dev/kvm unavailable on this runner — the VM integration harness was skipped. Use a KVM-capable (hosted ubuntu-* or self-hosted) runner to run it."
+            echo "::warning title=Integration skipped (no KVM)::/dev/kvm unavailable or not writable on this runner — the VM integration harness was skipped. Use a KVM-capable (hosted ubuntu-* or self-hosted) runner to run it."
           fi
 
       - name: Run integration harness (positive)
@@ -256,21 +326,34 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils e2fsprogs python3 wget gzip
 
+      # See the identical step in `integration` for why this rule is needed.
+      - name: Grant the runner access to /dev/kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm || true
+
       - name: Install Playwright + Chromium
         working-directory: tests/ui
         run: |
-          npm install
+          # `npm ci` (not `install`): package-lock.json is committed, so CI must
+          # install exactly what it pins rather than silently resolving newer
+          # versions of @playwright/test than the baselines were captured with.
+          npm ci
           npx playwright install --with-deps chromium
 
       - name: Detect /dev/kvm
         id: kvm
         run: |
-          if [ -e /dev/kvm ] && qemu-system-x86_64 --version >/dev/null 2>&1; then
+          # Read/write, not existence -- see the integration job's note.
+          if [ -r /dev/kvm ] && [ -w /dev/kvm ] && qemu-system-x86_64 --version >/dev/null 2>&1; then
             echo "available=true" >> "$GITHUB_OUTPUT"
             echo "KVM available — UI suites will run against a live LuCI VM."
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=UI VM suites skipped (no KVM)::/dev/kvm unavailable — the functional + visual suites need a live LuCI VM and were skipped. The review gallery (built from committed baselines) still publishes."
+            echo "::warning title=UI VM suites skipped (no KVM)::/dev/kvm unavailable or not writable — the functional + visual suites need a live LuCI VM and were skipped. The review gallery (built from committed baselines) still publishes."
           fi
 
       - name: Run functional suite

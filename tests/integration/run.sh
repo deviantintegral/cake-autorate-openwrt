@@ -50,7 +50,12 @@ SERVE=""
 log() { printf '%s\n' "== $* ==" >&2; }
 
 # ---- KVM gate -------------------------------------------------------------
-if [ ! -e /dev/kvm ] || ! qemu-system-x86_64 --version >/dev/null 2>&1; then
+# Read/write, not just existence: on a stock GitHub-hosted runner /dev/kvm is
+# present but root:kvm 0660, so an `-e` test passes and QEMU then dies with
+# EACCES -- which reads as a harness failure rather than "this box cannot
+# virtualize". CI installs a udev rule to make it 0666; this gate is what keeps
+# the distinction honest anywhere else.
+if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ] || ! qemu-system-x86_64 --version >/dev/null 2>&1; then
 	if [ "${CA_IT_REQUIRE_KVM:-0}" = 1 ]; then
 		echo "ERROR: KVM/qemu required but unavailable" >&2
 		exit 3
