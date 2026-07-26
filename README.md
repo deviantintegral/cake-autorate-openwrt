@@ -24,6 +24,27 @@ single build serves every target.
 > experimental "Darkmoon" C rewrite. The pin (tag, commit, tarball SHA-256) and
 > the full option provenance live in [`docs/upstream-option-inventory.md`](docs/upstream-option-inventory.md).
 
+## What it looks like
+
+**Network → Cake Autorate → Configuration.** A fresh instance needs only its two
+interfaces and the min/base/max rates; the interface pickers are populated from
+the live SQM config and confirm what they are backed by:
+
+![The Essentials tab of the LuCI configuration form, showing the DL/UL interface
+pickers with their SQM validation hints and the six shaper-rate fields](docs/images/config-essentials.png)
+
+**Network → Cake Autorate → Status.** A live per-instance readout, refreshed
+every 3 seconds from the running daemon, with start/stop/restart controls per
+instance and for the service as a whole:
+
+![The LuCI live status view, showing two running instances with their CAKE
+shaper rates, achieved rates, load conditions and average OWD deltas](docs/images/status-view.png)
+
+More screenshots — the grouped advanced tabs, the option search and a two-WAN
+setup — are in the [configuration reference](docs/configuration.md). All of them
+are captured from a real OpenWrt VM by the UI suite; see
+[`docs/testing.md`](docs/testing.md#documentation-screenshots) to regenerate them.
+
 ## Relationship to upstream cake-autorate
 
 Upstream is normally installed by hand into `/root/cake-autorate/` via its

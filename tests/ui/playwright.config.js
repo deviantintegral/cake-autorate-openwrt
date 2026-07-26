@@ -89,5 +89,15 @@ module.exports = defineConfig({
       name: 'visual',
       testDir: path.join(__dirname, 'visual'),
     },
+    {
+      // Documentation screenshots. Writes curated, UNMASKED PNGs into
+      // docs/images/ rather than comparing against baselines -- see
+      // docs/screenshots.spec.js for why the visual/ baselines cannot serve as
+      // documentation. Run on demand (`--project=docs`); CI names the
+      // functional and visual projects explicitly, so this never runs there and
+      // never rewrites committed images unattended.
+      name: 'docs',
+      testDir: path.join(__dirname, 'docs'),
+    },
   ],
 });

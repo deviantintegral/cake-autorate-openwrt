@@ -188,6 +188,33 @@ artifact.
 See [`tests/ui/README.md`](../tests/ui/README.md) for the full spec layout,
 masking details and serve-mode env knobs.
 
+### Documentation screenshots
+
+The images embedded in [`../README.md`](../README.md) and
+[`configuration.md`](configuration.md) are generated from the same live VM, by a
+third Playwright project:
+
+```sh
+cd tests/ui
+npx playwright test --project=docs      # writes docs/images/*.png
+```
+
+It is a generator, not a test: it asserts nothing and compares against no
+baseline. **CI never runs it** (the workflow names `--project=functional` and
+`--project=visual` explicitly), so it cannot gate a build or rewrite committed
+images unattended.
+
+It exists because the `visual/` baselines cannot double as documentation:
+
+- they **mask** every `data-live="1"` cell with a solid box, which is exactly
+  right for a stable diff and useless in a doc — it hides the live rates, OWD
+  deltas and load conditions a reader wants to see;
+- they capture `fullPage` (up to 2124px tall) to catch structural regressions
+  anywhere on the page, whereas a doc wants the one section under discussion.
+
+Regenerate the whole set in one run so the images look consistent with each
+other, and commit the result alongside the doc change that needs it.
+
 ## Running in CI
 
 `.github/workflows/ci.yml` runs on every push / pull request, pinned to 25.12.5,
