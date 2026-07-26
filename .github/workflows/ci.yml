@@ -34,8 +34,17 @@
 name: CI
 
 on:
+  # `push` is limited to main: without a branch filter, pushing a branch that
+  # has an open PR ran the entire pipeline twice for the same commit.
   push:
+    branches: [main]
   pull_request:
+
+# Supersede an in-flight run for the same ref. Only PR runs are cancelled --
+# a main run is the record for a commit that already landed, so it finishes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least-privilege: jobs only read the checkout and read/write artifacts.
 permissions:
@@ -70,45 +79,51 @@ jobs:
             gettext git libncurses-dev libssl-dev python3 python3-setuptools \
             rsync unzip zlib1g-dev file wget zstd
 
-      # Cache ONLY the SDK archive and the package downloads.
+      # Cache ONLY the SDK archive, keyed on the archive NAME.
       #
-      # build_dir is deliberately NOT cached. The SDK tarball already ships a
-      # prebuilt kernel tree (~12.8k files, .ko included), so a cached build_dir
-      # would mostly duplicate what the archive restores anyway; what it would
-      # actually save is the per-run kmod .apk packaging, and several GB of
-      # poorly-compressing cache traffic costs more than it saves.
-      - name: Cache SDK archive + package downloads
+      # The key deliberately does not hash the package Makefiles: the SDK has
+      # nothing to do with them, and hashing them minted a fresh 272 MB cache
+      # entry on every Makefile edit -- a good way to churn through the 10 GB
+      # repo budget and start missing the cache that matters.
+      #
+      # build_dir/staging_dir are NOT cached: the SDK tarball already ships a
+      # prebuilt kernel tree, and since NO_DEPS=1 the whole build is ~25s, so
+      # several GB of cache traffic would cost far more than it saves. dl/ is
+      # not cached either -- it now holds one ~100 KB source tarball.
+      - name: Cache SDK archive
         uses: actions/cache@v4
         with:
-          # Bust the cache when the SDK pin or either package Makefile changes.
-          key: owrt-${{ env.OWRT_VERSION }}-${{ hashFiles('net/cake-autorate/Makefile', 'luci/luci-app-cake-autorate/Makefile') }}
-          restore-keys: |
-            owrt-${{ env.OWRT_VERSION }}-
-          path: |
-            ~/sdk-cache
-            ~/owrt-dl
+          key: owrt-sdk-${{ env.SDK_ARCHIVE }}
+          path: ~/sdk-cache
 
       - name: Download + extract the 25.12.5 SDK
         run: |
-          mkdir -p ~/sdk-cache ~/owrt-dl
-          if [ ! -f ~/sdk-cache/"$SDK_ARCHIVE" ]; then
-            echo "== fetching $SDK_ARCHIVE =="
-            wget -q -O ~/sdk-cache/"$SDK_ARCHIVE" "$SDK_URL_DIR/$SDK_ARCHIVE"
+          mkdir -p ~/sdk-cache
+          cd ~/sdk-cache
+          # Verify the archive BEFORE trusting it, against the checksum file
+          # published alongside it. The previous version wrote wget's output
+          # straight to the cached path with no retries and no integrity check:
+          # a truncated download would be saved by the cache post-step (which
+          # runs on failure too), and every later run would then find the file
+          # present, reuse the corrupt copy and die in tar -- silently, and
+          # until the key happened to change. This also upgrades the pin from
+          # "whatever the URL served" to a cryptographic one.
+          wget -q --tries=3 --timeout=30 -O sha256sums "$SDK_URL_DIR/sha256sums"
+          grep " \*$SDK_ARCHIVE\$" sha256sums > sdk.sha256
+          if sha256sum -c --status sdk.sha256; then
+            echo "== using cached $SDK_ARCHIVE (checksum verified) =="
           else
-            echo "== using cached $SDK_ARCHIVE =="
+            echo "== fetching $SDK_ARCHIVE =="
+            rm -f "$SDK_ARCHIVE"
+            wget -q --tries=3 --timeout=30 -O "$SDK_ARCHIVE.part" "$SDK_URL_DIR/$SDK_ARCHIVE"
+            mv "$SDK_ARCHIVE.part" "$SDK_ARCHIVE"
+            sha256sum -c sdk.sha256
           fi
           rm -rf "$GITHUB_WORKSPACE/sdk"
           mkdir -p "$GITHUB_WORKSPACE/sdk"
           tar --use-compress-program=unzstd \
             -xf ~/sdk-cache/"$SDK_ARCHIVE" \
             -C "$GITHUB_WORKSPACE/sdk" --strip-components=1
-          # Point dl/ at the cached copy. It has to live outside the SDK tree:
-          # the cache is restored BEFORE this step, and the `rm -rf` above would
-          # otherwise delete whatever was restored into it -- which is exactly
-          # why the previous dl//build_dir caching never saved any work.
-          # Symlinking dl/ to a shared directory is standard OpenWrt practice.
-          rm -rf "$GITHUB_WORKSPACE/sdk/dl"
-          ln -s ~/owrt-dl "$GITHUB_WORKSPACE/sdk/dl"
 
       - name: Register this repo as the `cakeautorate` src-link feed
         working-directory: ${{ github.workspace }}/sdk
@@ -121,13 +136,18 @@ jobs:
           cp feeds.conf.default feeds.conf
           echo "src-link cakeautorate $GITHUB_WORKSPACE" >> feeds.conf
           cat feeds.conf
-          # `base` AND `luci` are both required, and neither is optional:
-          #   luci -> luci.mk, luci-base, luci-app-statistics
-          #   base -> the C libraries luci-base itself pulls in (liblua,
-          #           libucode, libubox, libubus, libnl-tiny, rpcd, iwinfo).
-          #           Without it lucihttp dies on a missing <lua.h>.
-          # The SDK ships only package/kernel + package/toolchain, so ALL base
-          # userland comes from this feed.
+          # `luci` is mandatory: luci-app-cake-autorate/Makefile does
+          # `include $(TOPDIR)/feeds/luci/luci.mk`, and luci-base/host (which
+          # supplies jsmin) lives there too.
+          #
+          # `base` is kept as well. It WAS strictly mandatory when this job
+          # built the dependency chain -- the SDK ships only package/kernel and
+          # package/toolchain, so liblua/libucode/libubox/libubus/libnl-tiny/
+          # rpcd/iwinfo all come from base, and without it lucihttp died on a
+          # missing <lua.h>. Under NO_DEPS=1 none of that is built any more, so
+          # base may well be droppable, but that is UNTESTED: the full sequence
+          # is verified with base present, and it costs ~13s of feed update.
+          # Not worth trading a verified build for an unverified one.
           #
           # `packages`/`routing`/`telephony`/`video` stay un-updated on purpose:
           # cake-autorate's remaining runtime deps (bash, fping, sqm-scripts,
@@ -152,26 +172,87 @@ jobs:
         run: |
           # Select our two packages and let defconfig resolve the rest.
           #
-          # This step used to claim it avoided CONFIG_ALL. It does not: defconfig
-          # sets CONFIG_ALL / ALL_KMODS / ALL_NONSHARED=y no matter what is
-          # written here, so ~1160 kmods end up selected and building
-          # cake-autorate (via its +kmod-sched-cake dep) packages every one of
-          # them into an .apk -- a few minutes per run. Writing explicit
-          # "# CONFIG_PACKAGE_kmod-... is not set" lines does NOT survive
-          # defconfig (verified), so this cost is accepted rather than fought.
+          # ~1190 kmods come out of defconfig selected as =m and CANNOT be
+          # deselected from .config. The SDK ships a generated Config-build.in
+          # holding one stanza per kmod:
+          #
+          #     config PACKAGE_kmod-sched-cake
+          #     	tristate
+          #     	default m
+          #
+          # with no prompt string. A promptless kconfig symbol is not
+          # user-settable, so `conf --defconfig` discards whatever .config says
+          # and re-applies `default m`. (Turning CONFIG_ALL/ALL_KMODS off does
+          # work and changes nothing -- they are not what selects these.)
+          #
+          # This used to cost ~30 min because building cake-autorate packaged
+          # every one of them. NO_DEPS=1 in the build step sidesteps the whole
+          # issue by never descending into package/kernel/linux at all, so the
+          # selection is now harmless metadata.
           {
             echo "CONFIG_PACKAGE_cake-autorate=m"
             echo "CONFIG_PACKAGE_luci-app-cake-autorate=m"
           } > .config
           make defconfig
 
-      - name: Build cake-autorate
+      - name: Build both packages
         working-directory: ${{ github.workspace }}/sdk
-        run: make package/cake-autorate/compile V=s
+        run: |
+          # NO_DEPS=1 builds ONLY the named package: include/subdir.mk gates
+          # every prerequisite edge behind $(if $(NO_DEPS)$(QUILT),,...).
+          #
+          # Without it, cake-autorate's +kmod-sched-cake dependency drags in
+          # package/kernel/linux/compile, which packages ~979 kmods one at a
+          # time. include/package.mk carries an unconditional `.NOTPARALLEL:`,
+          # so -j cannot speed that up -- it was ~30 of this job's ~34 minutes,
+          # producing nothing we ship. Both .apk files are BYTE-IDENTICAL with
+          # and without NO_DEPS (verified with cmp + `apk adbdump`).
+          #
+          # Nothing verifies the dependency chain at build time now, so the
+          # step below asserts the apk metadata instead -- which is the thing
+          # that actually ships, and which apk resolves on the device.
+          #
+          # luci-base/host comes FIRST and deliberately NOT under NO_DEPS.
+          # luci.mk's JsMin step runs `if jsmin < f > f.o; then mv f.o f; fi`
+          # and jsmin is built by luci-base/host. Skip it and that line fails
+          # SILENTLY -- exit 0, but every .js ships unminified alongside a
+          # stray zero-byte .js.o, a 66% bigger package (62878 vs 37781 bytes
+          # installed). It is only ~6s, and it is what keeps the output
+          # byte-identical.
+          make package/luci-base/host/compile
+          test -x staging_dir/hostpkg/bin/jsmin || {
+            echo "::error title=jsmin missing::luci-base/host did not produce jsmin; LuCI JS would ship unminified with .js.o litter"
+            exit 1
+          }
+          make package/cake-autorate/compile NO_DEPS=1 V=s
+          make package/luci-app-cake-autorate/compile NO_DEPS=1 V=s
 
-      - name: Build luci-app-cake-autorate
+      - name: Assert the built packages are complete
         working-directory: ${{ github.workspace }}/sdk
-        run: make package/luci-app-cake-autorate/compile V=s
+        run: |
+          apk=./staging_dir/host/bin/apk
+          ca=$(ls "$APK_SUBPATH"/cake-autorate-*.apk)
+          lu=$(ls "$APK_SUBPATH"/luci-app-cake-autorate-*.apk)
+
+          # The runtime deps are never built here (NO_DEPS, and several live in
+          # feeds we do not update), so assert they survived into the metadata.
+          # A dropped dependency would install cleanly and then fail at runtime.
+          for dep in bash collectd-mod-exec fping kmod-sched-cake libc sqm-scripts tc-tiny; do
+            "$apk" adbdump "$ca" | grep -qx "    - $dep" || {
+              echo "::error title=Lost dependency::cake-autorate.apk no longer declares '$dep'"
+              exit 1
+            }
+          done
+          echo "cake-autorate.apk declares all 7 expected dependencies."
+
+          # A zero-byte *.js.o in the payload is the exact signature of a JsMin
+          # that failed silently. Fail loudly rather than ship the bloated
+          # package -- nothing else in the pipeline would notice.
+          if "$apk" adbdump "$lu" | grep -q '\.js\.o$'; then
+            echo "::error title=jsmin did not run::luci apk contains .js.o litter and unminified JS"
+            exit 1
+          fi
+          echo "luci-app-cake-autorate.apk is free of .js.o litter (jsmin ran)."
 
       - name: Collect + list the built .apk files
         working-directory: ${{ github.workspace }}/sdk
