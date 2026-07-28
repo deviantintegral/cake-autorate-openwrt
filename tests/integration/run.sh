@@ -122,16 +122,38 @@ fi
 
 # ---- build the ext4 seed disk (apks + fixtures), no root/mount needed ------
 log "building seed disk"
-if [ ! -f "$APK_DIR/cake-autorate-3.2.2-r1.apk" ] || \
-   [ ! -f "$APK_DIR/luci-app-cake-autorate-1.0.0-r1.apk" ]; then
-	echo "ERROR: built apks not found in $APK_DIR" >&2
-	echo "       set CA_IT_APK_DIR or build them from the feed first" >&2
-	exit 3
-fi
+# Located by GLOB, never by literal filename: an apk name embeds PKG_VERSION and
+# PKG_RELEASE, and this harness has no business tracking either -- hardcoding
+# them means every version bump is also a test edit. Exactly one match per
+# package is required, so a stale apk left beside a fresh one is a loud error
+# rather than a silent install of the wrong build.
+#
+# `cake-autorate-*.apk` cannot catch the LuCI package: globs anchor at the start
+# of the name and that one begins "luci-app-".
+find_one_apk() {
+	pat=$1
+	set -- "$APK_DIR"/$pat
+	if [ ! -f "$1" ]; then
+		echo "ERROR: no apk matching $APK_DIR/$pat" >&2
+		echo "       set CA_IT_APK_DIR or build it from the feed first" >&2
+		exit 3
+	fi
+	if [ "$#" -gt 1 ]; then
+		echo "ERROR: $# apks match $APK_DIR/$pat -- remove the stale builds:" >&2
+		for f in "$@"; do echo "         $f" >&2; done
+		exit 3
+	fi
+	printf '%s\n' "$1"
+}
+# `|| exit 3`: find_one_apk runs in a subshell here, so its own exit cannot stop
+# the script -- the status has to be propagated at the call site.
+CA_APK=$(find_one_apk 'cake-autorate-*.apk') || exit 3
+LUCI_APK=$(find_one_apk 'luci-app-cake-autorate-*.apk') || exit 3
+log "seeding $(basename "$CA_APK") + $(basename "$LUCI_APK")"
 SEEDDIR="$CACHE/seeddir"
 rm -rf "$SEEDDIR"; mkdir -p "$SEEDDIR"
-cp "$APK_DIR"/cake-autorate-3.2.2-r1.apk "$SEEDDIR/"
-cp "$APK_DIR"/luci-app-cake-autorate-1.0.0-r1.apk "$SEEDDIR/"
+cp "$CA_APK" "$SEEDDIR/"
+cp "$LUCI_APK" "$SEEDDIR/"
 cp "$HERE"/fixtures/network-two-wan.sh "$SEEDDIR/"
 cp "$HERE"/fixtures/sqm-two-wan.config "$SEEDDIR/"
 cp "$HERE"/fixtures/cake-autorate-two-instance.config "$SEEDDIR/"

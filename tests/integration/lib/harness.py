@@ -122,10 +122,13 @@ class Harness:
         self.log("== mounting seed disk ==")
         # The seed is the LAST virtio disk. Find the ext4 one.
         self.g("mkdir -p /mnt/seed")
+        # Probed by glob: the apk filename carries PKG_VERSION-rPKG_RELEASE, and
+        # matching it literally here would make every version bump a test edit.
         rc, out = self.g(
             "for d in /dev/vdb /dev/vdc /dev/vdd; do "
             "[ -b $d ] && mount -t ext4 -o ro $d /mnt/seed 2>/dev/null && "
-            "[ -e /mnt/seed/cake-autorate-3.2.2-r1.apk ] && echo MOUNTED=$d && break; done")
+            "ls /mnt/seed/cake-autorate-*.apk >/dev/null 2>&1 && "
+            "echo MOUNTED=$d && break; done")
         self.A.check("seed: ext4 fixture disk mounts and holds the apks",
                      "MOUNTED=" in out, out.strip())
 
@@ -167,11 +170,17 @@ class Harness:
         # deps + the two local apks. apk resolves the package's declared deps
         # (bash, fping, tc-tiny, kmod-sched-cake, sqm-scripts, collectd-mod-exec,
         # luci-base) from the online repo; add rrdtool so RRDs are written.
+        #
+        # The two apks are named by glob (version-agnostic, see mount_seed). The
+        # guest shell expands them; `cake-autorate-*.apk` does not also match the
+        # LuCI package, whose name starts "luci-app-". mount_seed has already
+        # asserted at least the base apk is there, so a bare unexpanded pattern
+        # reaching apk is not a silent-skip risk.
         rc, out = self.g(
             "apk add --allow-untrusted "
             "collectd collectd-mod-exec collectd-mod-rrdtool sqm-scripts "
-            "/mnt/seed/cake-autorate-3.2.2-r1.apk "
-            "/mnt/seed/luci-app-cake-autorate-1.0.0-r1.apk 2>&1 | tail -25",
+            "/mnt/seed/cake-autorate-*.apk "
+            "/mnt/seed/luci-app-cake-autorate-*.apk 2>&1 | tail -25",
             t=400, capture="apk-install.txt")
         paths = {
             "fping": "$(command -v fping)",
