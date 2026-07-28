@@ -1,0 +1,287 @@
+# cake-autorate OpenWrt package + LuCI UI — reusable BUILD workflow.
+#
+# Sets up the pinned OpenWrt 25.12.5 SDK, registers THIS repo as a `src-link`
+# feed, builds net/cake-autorate + luci/luci-app-cake-autorate ONCE (packages
+# are PKG_ARCH:=all / noarch, so there is NO per-arch matrix), asserts the
+# results are complete, and uploads the .apk files as a workflow artifact.
+#
+# This lives on its own so `ci.yml` (push/PR) and `release.yml` (v* tag) build
+# through the SAME recipe. The steps below encode a lot of non-obvious detail --
+# NO_DEPS, the feed-append rule, the jsmin ordering -- and a copy in the release
+# workflow would drift from this one the first time any of it is touched. A
+# release must ship exactly what CI tested.
+#
+# Feed policy: the SDK ships a feeds.conf.default that pins every upstream feed
+# (base, packages, luci, routing, telephony, video) to an exact 25.12.5 commit.
+# This workflow APPENDS its own src-link to that file rather than replacing it --
+# luci-app-cake-autorate's Makefile does `include $(TOPDIR)/feeds/luci/luci.mk`,
+# so without the luci feed the app cannot build at all. Only the feeds that are
+# actually needed get `feeds update`d; see the feed step for why the rest are
+# deliberately left alone.
+
+name: Build
+
+on:
+  workflow_call:
+    outputs:
+      apk_artifact:
+        description: "Name of the uploaded .apk artifact"
+        value: ${{ jobs.build.outputs.apk_artifact }}
+      ca_apk:
+        description: "Filename of the built cake-autorate .apk"
+        value: ${{ jobs.build.outputs.ca_apk }}
+      luci_apk:
+        description: "Filename of the built luci-app-cake-autorate .apk"
+        value: ${{ jobs.build.outputs.luci_apk }}
+
+permissions:
+  contents: read
+
+env:
+  # Single source of truth for the 25.12.5 pin.
+  OWRT_VERSION: "25.12.5"
+  SDK_NAME: "openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64"
+  SDK_ARCHIVE: "openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+  SDK_URL_DIR: "https://downloads.openwrt.org/releases/25.12.5/targets/x86/64"
+  # Where the .apk artifacts land inside the SDK, and what they are named.
+  APK_SUBPATH: "bin/packages/x86_64/cakeautorate"
+  APK_ARTIFACT: "cake-autorate-apks"
+
+jobs:
+  build:
+    name: Build feed (OpenWrt 25.12.5 SDK)
+    runs-on: ubuntu-24.04
+    outputs:
+      # Literal, not ${{ env.APK_ARTIFACT }}: the `env` context is not reliably
+      # available when job-level outputs are evaluated, and a silently-empty
+      # artifact name would surface as a confusing download failure downstream.
+      # Keep this in step with the APK_ARTIFACT env above.
+      apk_artifact: cake-autorate-apks
+      ca_apk: ${{ steps.collect.outputs.ca_apk }}
+      luci_apk: ${{ steps.collect.outputs.luci_apk }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install SDK host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib \
+            gettext git libncurses-dev libssl-dev python3 python3-setuptools \
+            rsync unzip zlib1g-dev file wget zstd
+
+      # Cache ONLY the SDK archive, keyed on the archive NAME.
+      #
+      # The key deliberately does not hash the package Makefiles: the SDK has
+      # nothing to do with them, and hashing them minted a fresh 272 MB cache
+      # entry on every Makefile edit -- a good way to churn through the 10 GB
+      # repo budget and start missing the cache that matters.
+      #
+      # build_dir/staging_dir are NOT cached: the SDK tarball already ships a
+      # prebuilt kernel tree, and since NO_DEPS=1 the whole build is ~25s, so
+      # several GB of cache traffic would cost far more than it saves. dl/ is
+      # not cached either -- it now holds one ~100 KB source tarball.
+      - name: Cache SDK archive
+        uses: actions/cache@v4
+        with:
+          key: owrt-sdk-${{ env.SDK_ARCHIVE }}
+          path: ~/sdk-cache
+
+      - name: Download + extract the 25.12.5 SDK
+        run: |
+          mkdir -p ~/sdk-cache
+          cd ~/sdk-cache
+          # Verify the archive BEFORE trusting it, against the checksum file
+          # published alongside it. The previous version wrote wget's output
+          # straight to the cached path with no retries and no integrity check:
+          # a truncated download would be saved by the cache post-step (which
+          # runs on failure too), and every later run would then find the file
+          # present, reuse the corrupt copy and die in tar -- silently, and
+          # until the key happened to change. This also upgrades the pin from
+          # "whatever the URL served" to a cryptographic one.
+          wget -q --tries=3 --timeout=30 -O sha256sums "$SDK_URL_DIR/sha256sums"
+          grep " \*$SDK_ARCHIVE\$" sha256sums > sdk.sha256
+          if sha256sum -c --status sdk.sha256; then
+            echo "== using cached $SDK_ARCHIVE (checksum verified) =="
+          else
+            echo "== fetching $SDK_ARCHIVE =="
+            rm -f "$SDK_ARCHIVE"
+            wget -q --tries=3 --timeout=30 -O "$SDK_ARCHIVE.part" "$SDK_URL_DIR/$SDK_ARCHIVE"
+            mv "$SDK_ARCHIVE.part" "$SDK_ARCHIVE"
+            sha256sum -c sdk.sha256
+          fi
+          rm -rf "$GITHUB_WORKSPACE/sdk"
+          mkdir -p "$GITHUB_WORKSPACE/sdk"
+          tar --use-compress-program=unzstd \
+            -xf ~/sdk-cache/"$SDK_ARCHIVE" \
+            -C "$GITHUB_WORKSPACE/sdk" --strip-components=1
+
+      - name: Register this repo as the `cakeautorate` src-link feed
+        working-directory: ${{ github.workspace }}/sdk
+        run: |
+          # APPEND to the shipped feed list; do NOT overwrite it. Replacing
+          # feeds.conf.default with just our own src-link deleted the pinned
+          # `luci` feed, and luci-app-cake-autorate/Makefile includes
+          # $(TOPDIR)/feeds/luci/luci.mk -- so the build died with
+          # "No rule to make target '.../feeds/luci/luci.mk'".
+          cp feeds.conf.default feeds.conf
+          echo "src-link cakeautorate $GITHUB_WORKSPACE" >> feeds.conf
+          cat feeds.conf
+          # `luci` is mandatory: luci-app-cake-autorate/Makefile does
+          # `include $(TOPDIR)/feeds/luci/luci.mk`, and luci-base/host (which
+          # supplies jsmin) lives there too.
+          #
+          # `base` is kept as well. It WAS strictly mandatory when this job
+          # built the dependency chain -- the SDK ships only package/kernel and
+          # package/toolchain, so liblua/libucode/libubox/libubus/libnl-tiny/
+          # rpcd/iwinfo all come from base, and without it lucihttp died on a
+          # missing <lua.h>. Under NO_DEPS=1 none of that is built any more, so
+          # base may well be droppable, but that is UNTESTED: the full sequence
+          # is verified with base present, and it costs ~13s of feed update.
+          # Not worth trading a verified build for an unverified one.
+          #
+          # `packages`/`routing`/`telephony`/`video` stay un-updated on purpose:
+          # cake-autorate's remaining runtime deps (bash, fping, sqm-scripts,
+          # collectd-mod-exec) are written into the .apk metadata whether or not
+          # they exist at build time -- verified: the produced apk records
+          # "depends: libc bash fping tc-tiny kmod-sched-cake sqm-scripts
+          # collectd-mod-exec" -- and apk resolves them from the official repos
+          # on the device. The integration job proves that for real in a VM,
+          # which beats a build-time presence check, and pulling `packages` in
+          # would add a from-source collectd + rrdtool build for no new signal.
+          # Their "which does not exist" warnings during this step are expected.
+          ./scripts/feeds update base luci cakeautorate
+          # `install -a`, not `-a -p cakeautorate`: -p restricts installation to
+          # our own feed, which leaves luci-base's dependencies un-symlinked into
+          # package/feeds/ and the build fails to resolve them. Installing
+          # everything only creates symlinks -- `make package/<x>/compile` still
+          # builds nothing but <x> and its actual dependency chain.
+          ./scripts/feeds install -a
+
+      - name: Configure the build
+        working-directory: ${{ github.workspace }}/sdk
+        run: |
+          # Select our two packages and let defconfig resolve the rest.
+          #
+          # ~1190 kmods come out of defconfig selected as =m and CANNOT be
+          # deselected from .config. The SDK ships a generated Config-build.in
+          # holding one stanza per kmod:
+          #
+          #     config PACKAGE_kmod-sched-cake
+          #     	tristate
+          #     	default m
+          #
+          # with no prompt string. A promptless kconfig symbol is not
+          # user-settable, so `conf --defconfig` discards whatever .config says
+          # and re-applies `default m`. (Turning CONFIG_ALL/ALL_KMODS off does
+          # work and changes nothing -- they are not what selects these.)
+          #
+          # This used to cost ~30 min because building cake-autorate packaged
+          # every one of them. NO_DEPS=1 in the build step sidesteps the whole
+          # issue by never descending into package/kernel/linux at all, so the
+          # selection is now harmless metadata.
+          {
+            echo "CONFIG_PACKAGE_cake-autorate=m"
+            echo "CONFIG_PACKAGE_luci-app-cake-autorate=m"
+          } > .config
+          make defconfig
+
+      - name: Build both packages
+        working-directory: ${{ github.workspace }}/sdk
+        run: |
+          # NO_DEPS=1 builds ONLY the named package: include/subdir.mk gates
+          # every prerequisite edge behind $(if $(NO_DEPS)$(QUILT),,...).
+          #
+          # Without it, cake-autorate's +kmod-sched-cake dependency drags in
+          # package/kernel/linux/compile, which packages ~979 kmods one at a
+          # time. include/package.mk carries an unconditional `.NOTPARALLEL:`,
+          # so -j cannot speed that up -- it was ~30 of this job's ~34 minutes,
+          # producing nothing we ship. Both .apk files are BYTE-IDENTICAL with
+          # and without NO_DEPS (verified with cmp + `apk adbdump`).
+          #
+          # Nothing verifies the dependency chain at build time now, so the
+          # step below asserts the apk metadata instead -- which is the thing
+          # that actually ships, and which apk resolves on the device.
+          #
+          # luci-base/host comes FIRST and deliberately NOT under NO_DEPS.
+          # luci.mk's JsMin step runs `if jsmin < f > f.o; then mv f.o f; fi`
+          # and jsmin is built by luci-base/host. Skip it and that line fails
+          # SILENTLY -- exit 0, but every .js ships unminified alongside a
+          # stray zero-byte .js.o, a 66% bigger package (62878 vs 37781 bytes
+          # installed). It is only ~6s, and it is what keeps the output
+          # byte-identical.
+          make package/luci-base/host/compile
+          test -x staging_dir/hostpkg/bin/jsmin || {
+            echo "::error title=jsmin missing::luci-base/host did not produce jsmin; LuCI JS would ship unminified with .js.o litter"
+            exit 1
+          }
+          make package/cake-autorate/compile NO_DEPS=1 V=s
+          make package/luci-app-cake-autorate/compile NO_DEPS=1 V=s
+
+      - name: Assert the built packages are complete
+        working-directory: ${{ github.workspace }}/sdk
+        run: |
+          apk=./staging_dir/host/bin/apk
+          ca=$(ls "$APK_SUBPATH"/cake-autorate-*.apk)
+          lu=$(ls "$APK_SUBPATH"/luci-app-cake-autorate-*.apk)
+
+          # The runtime deps are never built here (NO_DEPS, and several live in
+          # feeds we do not update), so assert they survived into the metadata.
+          # A dropped dependency would install cleanly and then fail at runtime.
+          for dep in bash collectd-mod-exec fping kmod-sched-cake libc sqm-scripts tc-tiny; do
+            "$apk" adbdump "$ca" | grep -qx "    - $dep" || {
+              echo "::error title=Lost dependency::cake-autorate.apk no longer declares '$dep'"
+              exit 1
+            }
+          done
+          echo "cake-autorate.apk declares all 7 expected dependencies."
+
+          # A zero-byte *.js.o in the payload is the exact signature of a JsMin
+          # that failed silently. Fail loudly rather than ship the bloated
+          # package -- nothing else in the pipeline would notice.
+          if "$apk" adbdump "$lu" | grep -q '\.js\.o$'; then
+            echo "::error title=jsmin did not run::luci apk contains .js.o litter and unminified JS"
+            exit 1
+          fi
+          echo "luci-app-cake-autorate.apk is free of .js.o litter (jsmin ran)."
+
+      - name: Collect + list the built .apk files
+        id: collect
+        working-directory: ${{ github.workspace }}/sdk
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/apks"
+          # PKG_ARCH:=all -> the apks live under the x86_64 feed dir but are noarch.
+          find "$APK_SUBPATH" -name '*.apk' -print -exec cp {} "$GITHUB_WORKSPACE/apks/" \;
+          echo "== apks staged for upload =="
+          ls -l "$GITHUB_WORKSPACE/apks"
+          test -n "$(ls -A "$GITHUB_WORKSPACE/apks")" || { echo "ERROR: no .apk produced"; exit 1; }
+
+          # Publish the real filenames (they carry PKG_VERSION-rPKG_RELEASE) so
+          # callers -- release.yml in particular -- never have to hardcode a
+          # version to find them.
+          {
+            echo "ca_apk=$(cd "$GITHUB_WORKSPACE/apks" && ls cake-autorate-*.apk)"
+            echo "luci_apk=$(cd "$GITHUB_WORKSPACE/apks" && ls luci-app-cake-autorate-*.apk)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build summary
+        if: always()
+        run: |
+          {
+            echo "### Build (OpenWrt ${OWRT_VERSION})"
+            if [ -d "$GITHUB_WORKSPACE/apks" ] && [ -n "$(ls -A "$GITHUB_WORKSPACE/apks" 2>/dev/null)" ]; then
+              echo "Built noarch packages (no per-arch matrix):"
+              echo ""
+              ( cd "$GITHUB_WORKSPACE/apks" && for f in *.apk; do echo "- \`$f\`"; done )
+            else
+              echo "**FAILED** — no .apk artifacts were produced."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload .apk artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK_ARTIFACT }}
+          path: apks/*.apk
+          if-no-files-found: error

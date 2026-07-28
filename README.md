@@ -145,19 +145,21 @@ name).
 
 ## Installing (apk, not opkg)
 
-OpenWrt 25.12 uses the **`apk`** package manager — `opkg` is gone. Copy the two
-built `.apk` files to the router and install them together (so the dependency
-resolves in one shot):
+OpenWrt 25.12 uses the **`apk`** package manager — `opkg` is gone.
+
+Grab both `.apk` files from the [latest
+release](https://github.com/deviantintegral/cake-autorate-openwrt/releases/latest)
+(or build them yourself, above), copy them to the router, and install them
+together so the dependency between them resolves in one shot:
 
 ```sh
-apk add ./cake-autorate-3.2.2-r1.apk ./luci-app-cake-autorate-1.0.0-r1.apk
+apk add --allow-untrusted ./cake-autorate-*.apk ./luci-app-cake-autorate-*.apk
 ```
 
-If you serve the feed from a repository instead, add it to `apk` and:
-
-```sh
-apk add cake-autorate luci-app-cake-autorate
-```
+`--allow-untrusted` is needed because loose `.apk` files are not signed by a
+repository key; verify them against the release's `SHA256SUMS` first. There is
+**no hosted apk repository yet**, so the `apk add cake-autorate` form does not
+work — that needs a signed package index, which this feed does not publish.
 
 `apk` pulls the runtime dependencies automatically: `bash`, `fping`, `tc-tiny`,
 `kmod-sched-cake`, **`sqm-scripts`** and `collectd-mod-exec`.
@@ -186,26 +188,41 @@ After installing, configure at least one instance's interfaces and rates
 - [`AGENTS.md`](AGENTS.md) — durable design invariants for anyone (human or
   automated) changing the code.
 
-## Continuous integration (GitHub-hosting prerequisite)
+## Continuous integration
 
 `.github/workflows/ci.yml` defines a three-job pipeline on every push / PR —
 **build** (25.12.5 SDK, noarch, one build), **integration** (QEMU/KVM VM
 harness) and **ui** (Playwright functional + visual + review gallery) — pinned to
 25.12.5 throughout.
 
-> **This repository has no git remote yet.** The workflow file exists but cannot
-> run until the repo is published to GitHub. To enable CI, create a GitHub
-> repository and push:
->
-> ```sh
-> git remote add origin git@github.com:<owner>/cake-autorate-openwrt.git
-> git push -u origin main
-> git push origin HEAD          # push the feature branch / open a PR
-> ```
->
-> GitHub-hosted `ubuntu-*` runners expose `/dev/kvm`, so the VM-backed jobs run
-> for real; a runner without KVM **skips them visibly** (a `::warning` + summary
-> line), never a silent green pass. See [`docs/testing.md`](docs/testing.md).
+The build recipe itself lives in `.github/workflows/build.yml`, a reusable
+workflow. `ci.yml` and `release.yml` both call it, so a release ships packages
+built by exactly the steps every commit is tested with.
+
+GitHub-hosted `ubuntu-*` runners expose `/dev/kvm`, so the VM-backed jobs run
+for real; a runner without KVM **skips them visibly** (a `::warning` + summary
+line), never a silent green pass. See [`docs/testing.md`](docs/testing.md).
+
+## Cutting a release
+
+`.github/workflows/release.yml` runs on a `v*` tag. It rebuilds both packages
+from the tagged tree and publishes them as `.apk` assets on a GitHub Release,
+with a `SHA256SUMS` file alongside.
+
+```sh
+git tag -a v1.1.0 -m "v1.1.0"
+git push origin v1.1.0
+```
+
+A tag publishes **immediately** — there is no draft step. A tag with a suffix
+(`v1.1.0-rc1`) is marked as a prerelease so it never becomes "Latest".
+
+The tag is the *repository's* version and is deliberately not checked against
+either package's `PKG_VERSION`: `cake-autorate` tracks **upstream's** version
+(3.2.2) and is not ours to choose, while `luci-app-cake-autorate` carries its
+own. Bump `PKG_RELEASE` when the packaging changes without an upstream bump.
+The release notes list the real built filenames, so what a tag shipped is never
+ambiguous.
 
 ## Upstream-submission readiness
 

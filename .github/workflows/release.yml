@@ -1,0 +1,150 @@
+# cake-autorate OpenWrt package + LuCI UI — RELEASE.
+#
+# Trigger: pushing a `v*` tag. That is a deliberate maintainer action and it
+# publishes IMMEDIATELY -- there is no draft step to review. Re-cutting means
+# `gh release delete` + a new tag, so check the version bump before tagging.
+#
+# What it does:
+#   1. Builds both packages from the TAGGED tree through the same reusable
+#      `build.yml` that CI uses, so the released .apk files come off the exact
+#      recipe (and the same assertions) that every push/PR is tested with.
+#   2. Publishes them as GitHub Release assets, alongside a SHA256SUMS file.
+#
+# Why assets at all: until a signed apk repository exists, a Release is the only
+# way for a router owner to get these packages without standing up an OpenWrt
+# SDK. CI artifacts do not serve that purpose -- they are login-walled and
+# expire. The SHA256SUMS file is also the input the future apk-index job needs.
+#
+# NOTE ON VERSIONS: the tag is the REPO's version. It is deliberately not
+# asserted against either package's PKG_VERSION, because the two disagree by
+# design -- `cake-autorate`'s PKG_VERSION tracks UPSTREAM (3.2.2) and is not
+# ours to choose, while `luci-app-cake-autorate` carries its own (1.0.0). The
+# release notes list the real built filenames so there is no ambiguity about
+# what a given tag shipped.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Never let two runs publish the same tag concurrently.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Gate the build on the tag being well-formed. This is its own job, ahead of
+  # `build`, so a typo'd tag costs seconds rather than a full SDK build that
+  # then refuses to publish -- which would leave a pushed tag with no release
+  # and no obvious reason why.
+  validate:
+    name: Validate tag
+    runs-on: ubuntu-24.04
+    outputs:
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - name: Validate the tag shape
+        id: tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          # vX.Y.Z, optionally with a prerelease suffix (v1.2.0-rc1).
+          if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error title=Bad tag::'$tag' is not vX.Y.Z or vX.Y.Z-suffix"
+            exit 1
+          fi
+          # A suffix marks it a prerelease, so an -rc never lands as "Latest".
+          case "$tag" in
+            *-*) pre=true ;;
+            *)   pre=false ;;
+          esac
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+          echo "Tag $tag validated (prerelease=$pre)"
+
+  # Same recipe as CI. Checkout inside the reusable workflow resolves to the
+  # tag, so this builds the tagged tree, not main.
+  build:
+    needs: validate
+    uses: ./.github/workflows/build.yml
+
+  publish:
+    name: Publish GitHub Release
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      # The only job in either workflow that writes. `build` stays read-only.
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download the built .apk files
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.apk_artifact }}
+          path: apks
+
+      - name: Checksum the assets
+        working-directory: apks
+        run: |
+          ls -l
+          # Sorted so the file is reproducible regardless of glob order.
+          sha256sum $(ls *.apk | sort) > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Compose the release notes
+        env:
+          CA_APK: ${{ needs.build.outputs.ca_apk }}
+          LUCI_APK: ${{ needs.build.outputs.luci_apk }}
+          # Absolute, not repo-relative: relative links resolve against the
+          # release page URL, not the repo root, so `../../blob/...` 404s.
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          # The body lives in .github/release-notes-template.md rather than a
+          # heredoc: a heredoc inside a YAML block scalar has to carry the
+          # block's indentation on every line, which mangles the fenced code
+          # blocks. A real file is also reviewable and editable on its own.
+          cp .github/release-notes-template.md notes.md
+          # Package versions come from the build outputs, never from a literal
+          # here -- PKG_VERSION/PKG_RELEASE move independently of the tag.
+          sed -i "s|__CA_APK__|${CA_APK}|g; s|__LUCI_APK__|${LUCI_APK}|g; s|__REPO_URL__|${REPO_URL}|g" notes.md
+          # sed's `r` cannot be used inline; splice the checksums with awk.
+          awk 'FNR==NR{sums=sums $0 ORS; next} /^__SHASUMS__$/{printf "%s", sums; next} {print}' \
+            apks/SHA256SUMS notes.md > notes.final.md
+          mv notes.final.md notes.md
+          cat notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # --generate-notes appends the auto-derived commit changelog after our
+          # body, so the release carries both the install instructions and the
+          # what-changed list.
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --generate-notes \
+            --prerelease=${{ needs.validate.outputs.prerelease }} \
+            apks/*.apk apks/SHA256SUMS
+
+      - name: Release summary
+        if: always()
+        run: |
+          {
+            echo "### Release \`${GITHUB_REF_NAME}\`"
+            echo ""
+            if [ -f apks/SHA256SUMS ]; then
+              echo "Published assets:"
+              echo ""
+              echo '```'
+              cat apks/SHA256SUMS
+              echo '```'
+            else
+              echo "**FAILED** — no assets were published."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -128,5 +128,14 @@ CI (`.github/workflows/ci.yml`, pinned 25.12.5) runs three jobs on push/PR —
 **build** (SDK, noarch, artifact `cake-autorate-apks`), **integration**
 (`integration-artifacts`) and **ui** (`ui-playwright-report`, `ui-gallery`).
 VM-backed steps skip **visibly** without `/dev/kvm`. See `docs/testing.md` for
-detail. **The repo has no git remote yet — CI cannot run until it is pushed to
-GitHub.**
+detail.
+
+The build recipe lives in the reusable `.github/workflows/build.yml`; `ci.yml`
+and `release.yml` (on a `v*` tag) both call it. **Do not fork that recipe into a
+second workflow** — a release has to ship what CI tested.
+
+**Never hardcode an apk filename.** `cake-autorate-<PKG_VERSION>-r<PKG_RELEASE>.apk`
+moves whenever either field does, so the test harness and the release job locate
+the packages by glob (`cake-autorate-*.apk`, `luci-app-cake-autorate-*.apk` —
+the first cannot match the second, since globs anchor at the start of the name).
+Hardcoding one turns every version bump into a test edit.

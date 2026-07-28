@@ -236,6 +236,7 @@ the gallery still publish so a KVM-less runner yields signal. The **visual diff
 is advisory** (baselines are environment-specific for fonts/GPU): CI uploads the
 HTML diff report for human review but does not fail the pipeline on a pixel diff.
 
-> **The workflow cannot run until the repo is published to GitHub** — this repo
-> has no git remote yet. Create a GitHub repository and push (see the
-> [README CI section](../README.md#continuous-integration-github-hosting-prerequisite)).
+The build itself lives in the reusable `.github/workflows/build.yml`, which
+`ci.yml` and `release.yml` both call — so the `.apk` files a release publishes
+are built by the same steps these jobs test against. See the
+[README CI section](../README.md#continuous-integration).
