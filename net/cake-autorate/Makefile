@@ -16,6 +16,9 @@ PKG_RELEASE:=1
 # docs/upstream-option-inventory.md for the provenance of this hash.
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/lynxthecat/cake-autorate/tar.gz/refs/tags/v$(PKG_VERSION)?
+# Renovate rewrites PKG_VERSION above (see the custom manager in renovate.json)
+# but cannot compute this -- a version-bump PR ships a stale hash on purpose and
+# fails the download loudly. Regenerate it before merging.
 PKG_HASH:=892d8e648f6b3705f31799736e697874da3802b5e56ce4aea257cfdf6a376414
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 

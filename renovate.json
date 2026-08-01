@@ -2,5 +2,148 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "internalChecksFilter": "strict",
+  "minimumReleaseAge": "3 days",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "OpenWrt release. One pin, restated in ~30 places: the SDK the feed builds against, the CI env, the image the QEMU harness boots, and the docs that quote it. All of them are one dep so a bump arrives as a single PR and the prose cannot drift from the pin. The patterns are deliberately non-overlapping -- no two may match the same literal, or the second update would look for a replaceString the first already rewrote. Renovate compiles these with RE2, so lookaround is unavailable: the ` SDK` variants are separated by anchoring on the preceding token instead.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/(build|ci)\\.yml$/",
+        "/^\\.github/release-notes-template\\.md$/",
+        "/^tests/integration/run\\.sh$/",
+        "/^tests/integration/lib/harness\\.py$/",
+        "/^tests/(integration|ui)/README\\.md$/",
+        "/^(README|AGENTS)\\.md$/",
+        "/^docs/testing\\.md$/"
+      ],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "OWRT_VERSION: \"(?<currentValue>\\d+\\.\\d+\\.\\d+)\"",
+        "IMG_VER=\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\"",
+        "openwrt-sdk-(?<currentValue>\\d+\\.\\d+\\.\\d+)-x86-64",
+        "openwrt-(?<currentValue>\\d+\\.\\d+\\.\\d+)-x86-64-generic",
+        "/releases/(?<currentValue>\\d+\\.\\d+\\.\\d+)/targets/",
+        "OpenWrt (?<currentValue>\\d+\\.\\d+\\.\\d+)",
+        "[Tt]he (?<currentValue>\\d+\\.\\d+\\.\\d+) SDK",
+        ": (?<currentValue>\\d+\\.\\d+\\.\\d+) SDK",
+        "\\((?<currentValue>\\d+\\.\\d+\\.\\d+) SDK",
+        "pinned\\s+(?:to\\s+)?(?<currentValue>\\d+\\.\\d+\\.\\d+)",
+        "(?<currentValue>\\d+\\.\\d+\\.\\d+) target",
+        "[Tt]he (?<currentValue>\\d+\\.\\d+\\.\\d+) pin",
+        "exact (?<currentValue>\\d+\\.\\d+\\.\\d+) commit"
+      ],
+      "depNameTemplate": "openwrt/openwrt",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v(?<version>.+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Upstream lynxthecat/cake-autorate release built by the OpenWrt package",
+      "managerFilePatterns": [
+        "/^net/cake-autorate/Makefile$/"
+      ],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "PKG_VERSION:=(?<currentValue>\\d+\\.\\d+\\.\\d+)",
+        "tag v(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "lynxthecat/cake-autorate",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v(?<version>.+)$",
+      "versioningTemplate": "semver"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "OpenWrt bumps carry a companion sha256 (and possibly a new toolchain string) that Renovate cannot compute -- always human-driven",
+      "matchDepNames": [
+        "openwrt/openwrt"
+      ],
+      "automerge": false,
+      "prBodyNotes": [
+        "**Manual follow-up required before this can merge.**",
+        "- `tests/integration/run.sh`: `IMG_SHA256` still names the OLD image. Refresh it from `https://downloads.openwrt.org/releases/<version>/targets/x86/64/sha256sums` (the entry for `openwrt-<version>-x86-64-generic-ext4-combined.img.gz`), or the integration job aborts with `image sha256 mismatch`.",
+        "- `.github/workflows/build.yml`: `SDK_NAME` / `SDK_ARCHIVE` also embed the compiler and libc (`gcc-14.3.0_musl`). If the new release changed the toolchain the SDK download 404s -- check that release's `targets/x86/64/` listing and update both names.",
+        "- On a MINOR or MAJOR bump only, the deliberately-fuzzy two-component series strings are left alone by design and need a look: the `DISTRIB_RELEASE=` boot assertion in `tests/integration/lib/harness.py` and its module docstring, the table row in `tests/integration/README.md`, and the `apk` note in `README.md`. Patch bumps need no action there.",
+        "- `docs/testing.md` links the README anchor `#building-with-the-openwrt-251205-sdk`, which is derived from the version with the dots stripped. Re-point it whenever the README heading moves."
+      ]
+    },
+    {
+      "description": "An upstream cake-autorate bump needs a new PKG_HASH, which Renovate cannot compute -- always human-driven",
+      "matchDepNames": [
+        "lynxthecat/cake-autorate"
+      ],
+      "automerge": false,
+      "prBodyNotes": [
+        "**Manual follow-up required before this can merge.**",
+        "- `net/cake-autorate/Makefile`: `PKG_HASH` still names the OLD tarball. Regenerate it with `make package/cake-autorate/download V=s` in the SDK, or `curl -sL 'https://codeload.github.com/lynxthecat/cake-autorate/tar.gz/refs/tags/v<version>' | sha256sum`.",
+        "- Reset `PKG_RELEASE:=1` -- it counts packaging-only revisions of a given upstream version.",
+        "- Re-check `docs/upstream-option-inventory.md` and the UCI bridge for options added, renamed or removed upstream."
+      ]
+    },
+    {
+      "description": "Tagged action releases: cooldown, then automerge",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
+      "description": "Major action bumps: same cooldown, still automerged -- CI builds the feed and boots the VM, so a breaking action fails visibly rather than silently",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
+      "description": "Pure digest moves: no release timestamp to age against, so always review",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "pinDigest",
+        "pin"
+      ],
+      "automerge": false,
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Playwright and the rest of the UI test tooling: minor/patch automerge, gated on the visual suite that renders against the pinned snapshots",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
+      "description": "A Playwright major can change how Chromium rasterises the LuCI forms, which means regenerating every snapshot in tests/ui/**-snapshots -- review by hand",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false,
+      "prBodyNotes": [
+        "If the visual suite fails on pixel diffs rather than behaviour, regenerate the baselines with `npm run test:visual:update` in `tests/ui/` and review the gallery before merging."
+      ]
+    }
   ]
 }
