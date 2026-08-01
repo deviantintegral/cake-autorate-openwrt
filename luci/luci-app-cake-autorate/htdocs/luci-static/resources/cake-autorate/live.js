@@ -2,10 +2,8 @@
 'require baseclass';
 
 /*
- * cake-autorate live-status + interface-validation pure helpers (task 9).
- *
- * SHARED, RUNTIME-FREE logic for two consumers:
- *   - view/cake-autorate/status.js  -- the polling status view.
+ * Pure helpers for live status and interface validation, shared by:
+ *   - view/cake-autorate/status.js   -- the polling status view.
  *   - view/cake-autorate/overview.js -- the SQM-validated dl_if / ul_if pickers.
  *
  * Keep this file free of LuCI runtime calls (no _(), no L.*, no rpc/poll) at
@@ -13,7 +11,7 @@
  * tests/live.test.js). The views own all rpc.declare / poll.add / DOM wiring and
  * wrap any user-facing string in _() themselves.
  *
- * Contracts consumed (task 8 rpcd, object "cake-autorate"):
+ * rpcd methods used (object "cake-autorate"):
  *   status {instance?} -> { "<inst>": {available, running, uptime_s?, reason?,
  *       dl_achieved_kbps, ul_achieved_kbps, dl_sum_delays, ul_sum_delays,
  *       dl_avg_owd_delta_us, ul_avg_owd_delta_us, dl_load_condition,
@@ -39,8 +37,8 @@ var STR_FIELDS = ['dl_load_condition', 'ul_load_condition', 'datetime', 'reason'
 /*
  * STATUS_FIELDS -- the DL/UL metric rows the status table renders, in order.
  * Each entry drives two value cells (download + upload). The view marks both
- * cells data-live="1" (task 12 masks them) with data-field set to the dl/ul key
- * (task 11 asserts them).
+ * data-live="1" and sets data-field to the dl/ul key, which is what the visual
+ * suite masks and the functional suite asserts on.
  */
 var STATUS_FIELDS = [
 	{ label: 'CAKE shaper rate', unit: 'Kbit/s', dl: 'cake_dl_rate_kbps', ul: 'cake_ul_rate_kbps' },
@@ -71,8 +69,8 @@ function pad2(n) {
 }
 
 /*
- * formatUptime(s) -- seconds -> compact human string. Non-finite -> em dash.
- * Grain drops as the value grows (days show d+h, hours show h+m, etc).
+ * formatUptime(s) -- seconds -> short human string; anything non-finite gives
+ * an em dash. Only the two largest units are shown (days show d+h, hours h+m).
  */
 function formatUptime(s) {
 	var n = toNum(s);
@@ -93,10 +91,10 @@ function formatUptime(s) {
 }
 
 /*
- * statusRow(instance, st) -- normalize one instance's status object into a
- * stable row model. Missing/garbage input degrades to an unavailable, stopped
- * row. When available:false the metric fields are null (the view shows
- * "no data yet" / "stopped") but run state + reason are preserved.
+ * statusRow(instance, st) -- turn one instance's status object into a row the
+ * view can render. Missing or garbage input becomes an unavailable, stopped
+ * row. When available is false the metric fields are null (the view shows
+ * "no data yet" / "stopped") but run state and reason are kept.
  */
 function statusRow(instance, st) {
 	st = (st && typeof st === 'object') ? st : {};
@@ -119,8 +117,8 @@ function statusRow(instance, st) {
 }
 
 /*
- * statusRows(resp) -- the whole `status` response -> a sorted array of row
- * models (one per instance key). Empty / non-object -> [].
+ * statusRows(resp) -- the whole `status` response -> one row per instance key,
+ * sorted by name. Empty or non-object input gives [].
  */
 function statusRows(resp) {
 	if (!resp || typeof resp !== 'object')
@@ -143,14 +141,13 @@ function interfaceChoices(sqm) {
 }
 
 /*
- * interfaceStatus(value, sqm, direction) -- the mismatch decision behind the
- * visible dl_if / ul_if warning. direction is 'dl' (ingress ifb) or 'ul'
- * (egress). Returns { level, message } where level is:
+ * interfaceStatus(value, sqm, direction) -- decides the dl_if / ul_if warning.
+ * direction is 'dl' (ingress ifb) or 'ul' (egress). Returns { level, message }:
  *   'none' -- empty value, nothing to say.
- *   'info' -- SQM not configured yet; cannot validate (do NOT hard-block).
- *   'ok'   -- value is backed by the live SQM qdisc.
- *   'warn' -- value is not backed by an SQM qdisc, or (ul) its ingress IFB is
- *             missing. Surfaced as a visible, NON-blocking warning.
+ *   'info' -- SQM is not configured yet, so we cannot check. Never blocks.
+ *   'ok'   -- the value is backed by a live SQM qdisc.
+ *   'warn' -- no SQM qdisc backs it, or (ul) its ingress IFB is missing. Shown
+ *             to the user but never blocks the save.
  * Messages are plain strings; the view wraps them for display.
  */
 function interfaceStatus(value, sqm, direction) {

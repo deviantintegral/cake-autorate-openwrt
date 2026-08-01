@@ -1,29 +1,29 @@
 'use strict';
 /*
- * Documentation screenshot GENERATOR -- deliberately not a test.
+ * Generates the screenshots the docs embed. Deliberately not a test.
  *
- * It asserts nothing about appearance and compares against no baseline; it drives
- * the same live LuCI VM the other suites use and writes curated PNGs into
- * docs/images/ for the Markdown docs to embed. Regenerate with:
+ * It checks nothing about appearance and compares against no baseline. It
+ * drives the same live LuCI VM the other suites use and writes PNGs into
+ * docs/images/. Regenerate with:
  *
  *   cd tests/ui && npx playwright test --project=docs
  *
- * It is NOT part of the CI pipeline (CI runs --project=functional and
- * --project=visual explicitly), so it never gates anything and never rewrites
- * committed images behind your back.
+ * CI runs --project=functional and --project=visual explicitly, so this never
+ * runs there, never gates anything, and never rewrites committed images behind
+ * your back.
  *
- * Two things separate these from the visual/ baselines, which are unusable as
- * documentation:
- *   - NO MASKING. visual/ paints every data-live="1" cell with a solid box so
- *     the 3-second poll cannot flake a diff; that hides exactly the numbers a
- *     reader wants to see. Here the real values are the point.
- *   - Framed to the subject. visual/ captures fullPage (up to 2124px tall) to
- *     catch structural regressions anywhere. Docs want the one section being
- *     described, so most shots here are element-scoped.
+ * Two things make these different from the visual/ baselines, which cannot
+ * serve as documentation:
+ *   - No masking. visual/ paints every data-live="1" cell over so the 3-second
+ *     poll cannot flake a diff, which hides exactly the numbers a reader wants
+ *     to see. Here the real values are the point.
+ *   - Framed on the subject. visual/ captures the full page, up to 2124px tall,
+ *     to catch layout changes anywhere. Docs want the one section being
+ *     described, so most shots here are scoped to an element.
  *
- * Because these are illustrations rather than assertions, small rendering
- * differences between machines do not matter -- but do regenerate the whole set
- * on one machine so the images look consistent alongside each other.
+ * Since these are illustrations, small rendering differences between machines
+ * do not matter -- but regenerate the whole set on one machine so the images
+ * look consistent next to each other.
  */
 const path = require('path');
 const fs = require('fs');
@@ -42,14 +42,13 @@ async function capture(target, name) {
 }
 
 /*
- * Capture an instance section TOGETHER WITH the tab strip above it.
+ * Capture an instance section together with the tab strip above it.
  *
- * A plain element shot of #cbi-cake-autorate-<name> begins at the tab
- * description, below the tab menu -- so the reader cannot tell which tab is
- * being shown, which is precisely the point when the docs are explaining that
- * the advanced options are grouped into tabs. So clip to the union of the tab
- * menu's box and the section's box instead, padded up a little to take in the
- * section heading.
+ * A plain element shot of #cbi-cake-autorate-<name> starts at the tab
+ * description, below the tab menu, so the reader cannot tell which tab is
+ * showing -- which is the whole point when the docs are explaining that the
+ * advanced options are grouped into tabs. Clip to both boxes instead, padded a
+ * little at the top to take in the section heading.
  */
 async function captureSectionWithTabs(page, sectionSel, name) {
   fs.mkdirSync(OUT, { recursive: true });

@@ -2,9 +2,9 @@
 # shellcheck disable=SC3043
 # cake-autorate.rpcd -- rpcd backend for luci-app-cake-autorate.
 #
-# Owned by plan 01 / task 8. Installed to /usr/libexec/rpcd/cake-autorate
-# (task 2/8 Makefile stanza). rpcd's file-object plugin exposes this script as
-# the ubus object named after the file, i.e. object "cake-autorate", and calls
+# Installed to /usr/libexec/rpcd/cake-autorate. rpcd's file-object plugin
+# exposes this script as the ubus object named after the file, i.e. object
+# "cake-autorate", and calls
 #     cake-autorate list             -> print the method schema (JSON)
 #     cake-autorate call <method>    -> method args arrive as JSON on stdin
 # Every method is gated by the package ACL
@@ -15,13 +15,13 @@
 #   sqm_interfaces            Derive shaping interfaces from the LIVE SQM config:
 #                             the WAN egress devices in /etc/config/sqm and the
 #                             ifb4<iface> ingress devices SQM created. Returns
-#                             validated choices for the LuCI UI (task 9): ul_if
-#                             <- egress_choices, dl_if <- ingress_choices, plus a
+#                             validated choices for the LuCI UI: ul_if <-
+#                             egress_choices, dl_if <- ingress_choices, plus a
 #                             per-interface mismatch flag.
 #   status {instance?}        Per-instance live status parsed from the daemon log
-#                             stream /var/log/cake-autorate.<instance>.log. Shares
-#                             the SUMMARY 13-field contract with task 6's collectd
-#                             source (docs/upstream-option-inventory.md 3.3).
+#                             /var/log/cake-autorate.<instance>.log. Uses the
+#                             same 13-field SUMMARY layout as the collectd exec
+#                             reader (docs/upstream-option-inventory.md 3.3).
 #   service {action,instance?} start|stop|restart|reload the service via
 #                             /etc/init.d/cake-autorate.
 #
@@ -51,13 +51,13 @@ US_INVALID_COMMAND=1
 US_INVALID_ARGUMENT=2
 
 # --------------------------------------------------------------------------
-# Input validation (SECURITY-CRITICAL). Keep these total and side-effect free.
+# Input validation (SECURITY-CRITICAL). Keep these free of side effects.
 # --------------------------------------------------------------------------
 
-# An instance id names a file path (/var/log/cake-autorate.<id>.log) and is
-# handed to /etc/init.d/cake-autorate. Restrict to [A-Za-z0-9_]+ so it can never
-# introduce a path component (../), a separator (/), whitespace, or a shell
-# metacharacter. Matches the UCI section-name rule enforced by the config bridge.
+# An instance id ends up in a file path (/var/log/cake-autorate.<id>.log) and is
+# handed to /etc/init.d/cake-autorate. Restricting it to [A-Za-z0-9_]+ rules out
+# path components (../), separators (/), whitespace and shell metacharacters.
+# Same rule the config bridge enforces on UCI section names.
 valid_instance() {
 	case "$1" in
 		'' | *[!A-Za-z0-9_]*) return 1 ;;
@@ -109,7 +109,8 @@ json_fields_body() {
 err_json() { printf '{"error":"%s"}\n' "$1"; }
 
 # --------------------------------------------------------------------------
-# SUMMARY log-line parser -- THE contract shared with task 6's collectd source.
+# SUMMARY log-line parser. The field layout below is shared with the collectd
+# exec reader; change one and you must change the other.
 #
 # Input : one raw log line ($1).
 # Output: on a valid SUMMARY line, "key<TAB>value" lines for the fields the
@@ -159,9 +160,9 @@ list_instances() {
 	fi
 	local fns="${CAKE_AUTORATE_FUNCTIONS_SH:-/lib/functions.sh}"
 	[ -r "$fns" ] || return 0
-	# OpenWrt's config_* helpers are not nounset-clean; the `set -u` above would
-	# abort them (this runs inside a $() subshell, so the abort silently yields an
-	# empty instance list). Relax nounset for the libuci block, then restore it.
+	# OpenWrt's config_* helpers read unbound variables, so the `set -u` above
+	# aborts them -- and because this runs inside a $() subshell the abort just
+	# yields an empty instance list. Turn nounset off for the libuci calls.
 	set +u
 	# shellcheck source=/dev/null
 	. "$fns"
@@ -178,7 +179,7 @@ _emit_enabled_instance() {
 }
 
 # JSON object for one instance's status (braces included). Never fails: a
-# missing or dataless log degrades to {"available":false,"reason":...}.
+# missing or empty log returns {"available":false,"reason":...}.
 status_instance_json() {
 	local inst="$1"
 	local logdir="${CAKE_AUTORATE_LOG_DIR:-/var/log}"
@@ -191,11 +192,11 @@ status_instance_json() {
 	# Best-effort run state (device-only; the run dir exists only while running).
 	run_json='"running":false'
 	if [ -d "$rundir/$inst" ]; then
-		# Uptime is measured from the generated config's mtime, which the bridge
-		# writes once per start/reload and never touches during operation -- a
-		# stable "running since last apply" basis. The run-dir mtime was used
-		# before but it advances whenever the daemon adds/removes state files
-		# under it, making the uptime jump erratically on each poll.
+		# Uptime is measured from the generated config's mtime. The bridge writes
+		# that once per start/reload and never touches it again, so it means
+		# "running since the last apply". The run-dir mtime was used before, but
+		# it moves whenever the daemon adds or removes a state file under it, so
+		# the uptime jumped around on every poll.
 		local mt now up
 		mt=$(stat -c %Y "$cfg" 2>/dev/null || echo '')
 		now=$(date +%s 2>/dev/null || echo '')
@@ -211,9 +212,9 @@ status_instance_json() {
 		printf '{"available":false,"reason":"no-log",%s}' "$run_json"
 		return 0
 	fi
-	# Bounded read: never source the log, only tail a fixed window and keep the
-	# newest real SUMMARY line (the unprefixed SUMMARY_HEADER cannot match
-	# "^SUMMARY; " because it starts with "SUMMARY_HEADER;").
+	# Never source the log; tail a fixed window and keep the newest real SUMMARY
+	# line. The header line cannot match "^SUMMARY; " because it starts with
+	# "SUMMARY_HEADER;".
 	line=$(tail -n 200 "$log" 2>/dev/null | grep '^SUMMARY; ' | tail -n1)
 	if [ -z "$line" ]; then
 		printf '{"available":false,"reason":"no-data",%s}' "$run_json"
@@ -286,10 +287,10 @@ do_sqm_interfaces() {
 	ifbs=$(list_ifb_devices)
 	sections=$(parse_sqm_sections "$sqm")
 
-	# Build the per-interface object array and the egress choice list.
-	# (Iterate the tab-separated section stream without a subshell so the
-	# accumulator survives -- read from a here-string via a temp is avoided by
-	# using a while over a printf pipe would subshell; use word-splitting.)
+	# Build the per-interface object array and the egress choice list. Split the
+	# section stream on newlines with a `for` loop rather than piping it into
+	# `while read`: a pipe would run the loop in a subshell and the accumulators
+	# would be lost when it exits.
 	local IFSAVE="$IFS"
 	IFS='
 '

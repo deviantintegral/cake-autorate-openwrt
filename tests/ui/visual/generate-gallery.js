@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 'use strict';
 /*
- * Human-review gallery generator (task 12, deliverable D).
+ * Builds a gallery of the UI screenshots for a human to look through.
  *
- * Collects the committed full-page baseline PNGs written by the visual suite
+ * Collects the committed full-page baseline PNGs the visual suite writes
  * (tests/ui/visual/<spec>.spec.js-snapshots/<name>-<project>-<platform>.png) and
- * emits a single self-contained, labelled index.html so a maintainer can eyeball
- * every page/state from a CI artifact -- no device, no diff tooling needed.
+ * emits one self-contained, labelled index.html, so a maintainer can review
+ * every page and state from a CI artifact without a device or diff tooling.
  *
- * This gallery is ALWAYS produced regardless of whether the visual diff passed or
- * failed: it reads the baselines (the canonical captured images), which exist as
- * soon as the suite has ever run with --update-snapshots. Run it right after the
- * visual project in CI and upload the output dir as an artifact.
+ * The gallery is produced whether the visual diff passed or failed, because it
+ * reads the baselines themselves -- which exist as soon as the suite has run
+ * once with --update-snapshots. Run it after the visual project in CI and upload
+ * the output dir as an artifact.
  *
  * Output (gitignored build artifact):
  *   tests/ui/visual/gallery/index.html
@@ -58,8 +58,8 @@ function snapshotStem(file) {
   return path.basename(file, '.png').replace(/-[a-z0-9]+-[a-z0-9]+$/i, '');
 }
 
-/* Human labels + grouping for each known snapshot stem. Unknown stems still show
- * up (humanized) so a newly added spec never silently drops out of the gallery. */
+/* Labels and grouping for each known snapshot stem. An unknown stem still shows
+ * up under a tidied-up name, so a newly added spec never drops out unnoticed. */
 const LABELS = {
   'status-view': { group: 'Live status view', label: 'Status view — two running instances (live cells masked)' },
   'config-multi-instance': { group: 'Configuration form', label: 'Multi-instance overview (primary + secondary)' },
@@ -185,7 +185,7 @@ ${empty
 
   fs.writeFileSync(path.join(out, 'index.html'), html);
 
-  // Machine-readable manifest for CI / debugging.
+  // Manifest for CI and debugging to read.
   fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify({
     generatedAt, count: records.length,
     images: records.map((r) => ({ stem: r.stem, file: `images/${r.fname}`, group: r.group, label: r.label, bytes: r.bytes })),

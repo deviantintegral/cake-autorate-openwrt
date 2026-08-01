@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """cake-autorate OpenWrt VM integration harness (host side).
 
-Boots a pinned OpenWrt 25.12.x VM under QEMU/KVM, injects and installs the
-built .apk packages plus sqm-scripts + deps, applies a TWO-instance
-cake-autorate UCI config over two SQM CAKE WANs, induces a controlled download
-load on the primary WAN so the control loop moves the CAKE bandwidth, and
-asserts the observable outcomes, capturing evidence to an artifacts dir.
+Boots a pinned OpenWrt 25.12.x VM under QEMU/KVM, installs the built .apk
+packages plus sqm-scripts and its dependencies, applies a two-instance
+cake-autorate UCI config over two SQM CAKE WANs, puts a download load on the
+primary WAN so the control loop moves the CAKE bandwidth, and checks what
+happens, saving evidence to an artifacts dir.
 
-Emits a single machine-checkable PASS/FAIL and exits 0 (all assertions passed)
-or non-zero (any assertion failed / infrastructure error).
+Prints one PASS/FAIL line and exits 0 when every check passed, non-zero when
+any check failed or the VM could not be brought up.
 
-Driven by tests/integration/run.sh -- see that script and the README for the
-CI contract and the "no KVM" fallback.
+Run by tests/integration/run.sh -- see that script and the README for how CI
+uses it and what happens without KVM.
 """
 import os
 import re
@@ -122,8 +122,8 @@ class Harness:
         self.log("== mounting seed disk ==")
         # The seed is the LAST virtio disk. Find the ext4 one.
         self.g("mkdir -p /mnt/seed")
-        # Probed by glob: the apk filename carries PKG_VERSION-rPKG_RELEASE, and
-        # matching it literally here would make every version bump a test edit.
+        # Matched by glob: the apk filename carries PKG_VERSION-rPKG_RELEASE, so
+        # a literal name here would make every version bump a test edit.
         rc, out = self.g(
             "for d in /dev/vdb /dev/vdc /dev/vdd; do "
             "[ -b $d ] && mount -t ext4 -o ro $d /mnt/seed 2>/dev/null && "
@@ -135,17 +135,17 @@ class Harness:
     def wait_for_net(self):
         """Wait until the guest can reach the package repo.
 
-        Probed over HTTP, NOT with ping. What this gates is `apk install`, which
-        needs TCP; ICMP to the public internet is a proxy that can be false while
-        the real thing works. It is false on GitHub-hosted runners specifically:
-        they run on Azure, which drops outbound ICMP echo regardless of
-        net.ipv4.ping_group_range, so a ping probe reported "guest has no
-        internet" on a guest whose TCP was fine and failed both VM jobs.
+        Probed over HTTP, not with ping. What this gates is `apk install`, which
+        needs TCP; ICMP to the internet only stands in for that, and it can fail
+        while TCP is fine. It does exactly that on GitHub-hosted runners: they
+        run on Azure, which drops outbound ICMP echo whatever
+        net.ipv4.ping_group_range says, so a ping probe reported "guest has no
+        internet" on a guest whose TCP worked and failed both VM jobs.
 
-        This does NOT weaken the ICMP coverage. The reflectors cake-autorate
-        actually measures against are the SLIRP gateways 10.0.2.2 / 10.0.3.2,
-        which QEMU answers itself and which assert_reflectors() checks directly
-        -- so the fping path is still proven, just not against the internet.
+        ICMP is still covered elsewhere. The reflectors cake-autorate measures
+        against are the SLIRP gateways 10.0.2.2 / 10.0.3.2, which QEMU answers
+        itself and which are checked directly, so the fping path is still
+        exercised -- just not against the internet.
         """
         self.log("== waiting for WAN/internet (HTTP) ==")
         url = "http://downloads.openwrt.org/releases/"
@@ -167,15 +167,15 @@ class Harness:
     def install(self):
         self.log("== installing packages ==")
         self.g("apk update 2>&1 | tail -2", t=180)
-        # deps + the two local apks. apk resolves the package's declared deps
+        # Dependencies plus the two local apks. apk pulls the declared deps
         # (bash, fping, tc-tiny, kmod-sched-cake, sqm-scripts, collectd-mod-exec,
-        # luci-base) from the online repo; add rrdtool so RRDs are written.
+        # luci-base) from the online repo; rrdtool is added so RRDs get written.
         #
-        # The two apks are named by glob (version-agnostic, see mount_seed). The
-        # guest shell expands them; `cake-autorate-*.apk` does not also match the
-        # LuCI package, whose name starts "luci-app-". mount_seed has already
-        # asserted at least the base apk is there, so a bare unexpanded pattern
-        # reaching apk is not a silent-skip risk.
+        # The apks are matched by glob, so no version appears here (see
+        # mount_seed). The guest shell expands them, and `cake-autorate-*.apk`
+        # cannot also match the LuCI package, whose name starts "luci-app-".
+        # mount_seed has already checked the base apk is present, so an
+        # unexpanded pattern reaching apk would not skip anything silently.
         rc, out = self.g(
             "apk add --allow-untrusted "
             "collectd collectd-mod-exec collectd-mod-rrdtool sqm-scripts "
@@ -194,8 +194,8 @@ class Harness:
             "collectd_dropin": "/etc/collectd/conf.d/cake-autorate.conf",
             "reader": "/usr/libexec/collectd/cake-autorate-collectd.sh",
         }
-        # One tiny command per path -- a single long multi-echo line can be
-        # truncated by the serial console under a fast output burst.
+        # One short command per path: a single long multi-echo line can be cut
+        # off by the serial console during a fast burst of output.
         report = []
         missing = []
         for k, v in paths.items():
@@ -240,13 +240,13 @@ class Harness:
     def configure_cake_autorate(self):
         self.log("== applying two-instance cake-autorate config ==")
         self.g("cp /mnt/seed/cake-autorate-two-instance.config /etc/config/cake-autorate")
-        # --- KNOWN DEFECT probe (task-4 bridge) --------------------------------
-        # The bridge runs `set -u` then sources /lib/functions.sh in its on-device
-        # libuci path; /lib/functions.sh dereferences the (conventionally unset)
-        # IPKG_INSTROOT, so the bridge aborts and writes NO per-instance config.
-        # Capture that as evidence, then apply the documented env workaround
-        # (IPKG_INSTROOT="" is the correct value on a live root) so the rest of
-        # the stack can be validated. See README "Known defect surfaced".
+        # --- regression probe: the libuci nounset bug --------------------------
+        # The bridge used to run `set -u` and then source /lib/functions.sh on
+        # its on-device libuci path. /lib/functions.sh reads IPKG_INSTROOT, which
+        # is normally unset, so the bridge aborted and wrote no per-instance
+        # config. Run the bridge and record what happened. On a fixed bridge
+        # `defect` is False and everything below is skipped; if it ever comes
+        # back, the workaround below keeps the rest of the run useful.
         rc, dfx = self.g(
             "rm -f /etc/cake-autorate/config.*.sh 2>/dev/null; "
             "env -u IPKG_INSTROOT /usr/libexec/cake-autorate/cake-autorate-bridge.sh 2>&1 | head -3; "
@@ -256,23 +256,20 @@ class Harness:
                       "on-device libuci bridge run (no fix applied):\n\n%s\n\n"
                       "defect_present=%s\n" % (dfx, defect))
         if defect:
-            # Non-gating finding: recorded loudly but not counted in the verdict,
-            # because the bridge is owned by task 4 and this harness's job is to
-            # prove the RUNTIME stack. See RESULT.txt "KNOWN DEFECT".
+            # Reported loudly but not counted in the verdict: this harness is
+            # here to exercise the running stack, and the unit tests own the
+            # bridge itself. See RESULT.txt.
             self.warnings.append(
-                "TASK-4 DEFECT: config bridge aborts on its on-device libuci "
+                "BRIDGE DEFECT: the config bridge aborts on its on-device libuci "
                 "path under `set -u` while sourcing /lib/functions.sh "
-                "(IPKG_INSTROOT and CONFIG_LIST_STATE dereferenced unbound); no "
+                "(IPKG_INSTROOT and CONFIG_LIST_STATE read unbound); no "
                 "per-instance config is generated and the service refuses to "
-                "start. Fix: wrap the libuci interaction in `set +u`. Harness "
-                "applies this fix IN-VM (emulated) to validate the rest.")
-            # Emulate the one-line fix task 4 must apply -- wrap the libuci
-            # interaction in `set +u` (OpenWrt's /lib/functions.sh is not
-            # set -u clean). Patched IN THE VM ONLY (never in the repo) so the
+                "start. Fix: wrap the libuci calls in `set +u`. The harness "
+                "patches that in the VM so the rest of the run still counts.")
+            # Apply the one-line fix in the VM only, never in the repo, so the
             # rest of the stack -- procd multi-instance, shaping, rpcd, collectd
-            # -- can be validated live. Once task 4 fixes the bridge, `defect`
-            # is False and this block is skipped, keeping the harness a valid gate.
-            self.log("APPLYING in-VM emulated task-4 fix: set +u in stream_from_libuci")
+            # -- can still be checked live.
+            self.log("patching set +u into stream_from_libuci inside the VM")
             self.g("sed -i 's|^stream_from_libuci() {|&\\n    set +u|' "
                    "/usr/libexec/cake-autorate/cake-autorate-bridge.sh; "
                    "export IPKG_INSTROOT=''; echo patched")
@@ -282,9 +279,9 @@ class Harness:
             self.artifact("bridge-fixed.txt", ver)
             self.log("post-fix bridge run: %s" % ver.replace("\n", " ")[:200])
         if self.args.negative:
-            # Deliberate misconfiguration: an invalid pinger binary makes the
-            # primary daemon exit at startup -> the 'both instances running'
-            # assertion below must FAIL, proving the harness has teeth.
+            # Break the config on purpose: an invalid pinger binary makes the
+            # primary daemon exit at startup, so the "both instances running"
+            # check below must fail. That is how we know the checks have teeth.
             self.g("uci set cake-autorate.primary.pinger_binary='ca_no_such_binary'; "
                    "uci commit cake-autorate")
             self.log("NEGATIVE MODE: primary.pinger_binary set to a bogus value")
@@ -394,7 +391,7 @@ class Harness:
                          capture="rpcd-status-primary.txt")
         rc, sts = self.g("ubus call cake-autorate status '{\"instance\":\"secondary\"}' 2>/dev/null",
                          capture="rpcd-status-secondary.txt")
-        # Also capture the no-arg enumeration path (surfaces the task-8 defect).
+        # Also capture the no-arg listing path.
         rc, stall = self.g("ubus call cake-autorate status 2>/dev/null", capture="rpcd-status.txt")
         has_p = '"primary"' in stp
         has_s = '"secondary"' in sts
@@ -403,21 +400,22 @@ class Harness:
                      has_p and has_s and has_rate,
                      ("primary=%s secondary=%s" % (stp.replace("\n", " ")[:150],
                                                    sts.replace("\n", " ")[:80])))
-        # Non-gating finding: the no-arg enumeration path returns empty.
+        # Reported but not counted in the verdict: listing with no instance
+        # returns an empty object.
         if '"primary"' not in stall:
             self.warnings.append(
-                "TASK-8 DEFECT: rpcd `status` with no instance returns an empty "
-                "object -- list_instances() sources /lib/functions.sh + config_load "
-                "under `set -u` (same root cause as the bridge) and aborts in its "
-                "command-substitution subshell. Per-instance status works; only "
-                "enumeration is affected. Fix: `set +u` around the UCI read.")
+                "RPCD DEFECT: `status` with no instance returns an empty object. "
+                "list_instances() sources /lib/functions.sh and calls config_load "
+                "under `set -u` (same cause as the bridge) and aborts inside its "
+                "command-substitution subshell. Per-instance status still works. "
+                "Fix: `set +u` around the UCI read.")
 
     def assert_collectd(self):
         self.log("== wiring + asserting collectd metrics ==")
-        # Deterministic collectd config that Includes the package drop-in and
-        # writes RRDs. This exercises the documented Include caveat: the global
-        # collectd config MUST cover /etc/collectd/conf.d for the drop-in's exec
-        # plugin (and thus the cake-autorate reader) to load.
+        # A collectd config that Includes the package drop-in and writes RRDs.
+        # This covers the documented catch: the global collectd config must
+        # Include /etc/collectd/conf.d, or the drop-in's exec plugin -- and so
+        # the cake-autorate reader -- never loads.
         conf = ('Hostname "openwrt-it"\nInterval 5\n'
                 'LoadPlugin rrdtool\n<Plugin rrdtool>\n  DataDir "/var/lib/collectd/rrd"\n</Plugin>\n'
                 'Include "/etc/collectd/conf.d/*.conf"\n')
@@ -463,17 +461,18 @@ class Harness:
                      "LEFT:" not in leftover, leftover.replace("\n", " "))
 
     # ------------------------------------------------------------------
-    # SERVE MODE (opt-in, for tests/ui Playwright). Boots + installs + configures
-    # exactly like a positive run, then brings up LuCI (uhttpd + a known root
-    # password) and STAYS UP with LuCI reachable on the forwarded host port until
-    # a stop-file appears or a signal arrives. Emits a JSON "ready" file with the
-    # base URL + credentials. Never runs the load/shaping assertions -- it is a
-    # live endpoint, not a PASS/FAIL gate, so it MUST NOT change run.sh's verdict.
+    # SERVE MODE (opt-in, for the tests/ui Playwright suites). Boots, installs
+    # and configures exactly like a normal run, then brings up LuCI (uhttpd and a
+    # known root password) and stays up, reachable on the forwarded host port,
+    # until a stop-file appears or a signal arrives. Writes a JSON "ready" file
+    # with the base URL and credentials. It never runs the load/shaping checks --
+    # it is a live endpoint, not a pass/fail run, and must not change run.sh's
+    # verdict.
     # ------------------------------------------------------------------
     def host_http_probe(self, path="/", timeout=5):
-        """Probe the forwarded LuCI port FROM THE HOST (the definitive check --
-        this is exactly what the browser reaches). Returns (status_or_None, body).
-        Follows redirects so an http->/cgi-bin/luci/ 302 still resolves."""
+        """Probe the forwarded LuCI port from the host, which is exactly what
+        the browser will reach. Returns (status_or_None, body) and follows
+        redirects, so an http -> /cgi-bin/luci/ 302 still resolves."""
         import urllib.request
         import urllib.error
         url = "http://%s:%d%s" % (self.args.serve_host, self.args.serve_port, path)
@@ -497,11 +496,11 @@ class Harness:
         # Set a known root password so LuCI's rpcd login accepts it (the stock
         # image ships an empty password; LuCI still needs one to authenticate).
         self.g("(echo '%s'; echo '%s') | passwd root >/dev/null 2>&1; echo pw-set" % (pw, pw))
-        # The two-WAN test topology (network-two-wan.sh) deletes LAN and puts both
-        # NICs in the firewall 'wan' zone, which DROPS inbound HTTP. The forwarded
-        # LuCI port arrives via that zone, so LuCI is unreachable until we open it.
-        # Open 80/443 for the test AND stop the firewall (disposable VM) so the
-        # browser can always reach uhttpd.
+        # The two-WAN topology (network-two-wan.sh) deletes LAN and puts both
+        # NICs in the firewall 'wan' zone, which drops inbound HTTP. The
+        # forwarded LuCI port arrives through that zone, so open 80/443 and stop
+        # the firewall outright -- the VM is disposable -- to be sure the browser
+        # can reach uhttpd.
         self.g("uci -q delete firewall.luci_serve; "
                "uci set firewall.luci_serve=rule; "
                "uci set firewall.luci_serve.name='Allow-LuCI-serve'; "
@@ -534,7 +533,7 @@ class Harness:
                "echo '# cgi:'; ls -l /www/cgi-bin/ 2>&1; "
                "echo '# uhttpd log:'; logread 2>/dev/null | grep -i uhttpd | tail -5",
                capture="serve-luci-diag.txt")
-        # Verify LuCI answers FROM THE HOST via the forwarded port (definitive).
+        # Check LuCI answers from the host through the forwarded port.
         ok = False
         detail = ""
         for _ in range(30):
@@ -630,7 +629,7 @@ class Harness:
         finally:
             if self.vm:
                 self.vm.stop()
-            # Never leave a stale ready-file claiming a live endpoint.
+            # Never leave a ready-file behind claiming a live endpoint.
             try:
                 if rc != 0 and os.path.exists(self.args.serve_ready_file):
                     os.unlink(self.args.serve_ready_file)
@@ -661,7 +660,7 @@ class Harness:
             self.A.check("harness: unexpected error", False, repr(e))
             self.logf.write(traceback.format_exc())
         finally:
-            # capture the tail of the serial log as evidence
+            # save the tail of the serial log as evidence
             try:
                 self.g("logread 2>/dev/null | grep -i cake-autorate | tail -20", capture="syslog-cake.txt")
             except Exception:
@@ -670,8 +669,8 @@ class Harness:
                 self.vm.stop()
         p, n = self.A.summary()
         verdict = "PASS" if (self.A.all_ok() and n > 0) else "FAIL"
-        # Negative mode injects a broken config; the assertions SHOULD fail, so a
-        # non-zero exit here is the desired proof that the harness has teeth.
+        # Negative mode installs a broken config, so the checks are meant to
+        # fail; a non-zero exit here is the point.
         self.log("\n==== %d/%d assertions passed ====" % (p, n))
         for w in self.warnings:
             self.log("KNOWN DEFECT / WARNING: " + w)

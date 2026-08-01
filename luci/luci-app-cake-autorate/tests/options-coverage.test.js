@@ -2,25 +2,23 @@
 'use strict';
 
 /*
- * Unit tests for the CUSTOM client-side logic in
+ * Unit tests for the logic we wrote in
  *   htdocs/luci-static/resources/cake-autorate/options.js
  *
- * What this validates (the non-framework logic worth testing per the test
- * philosophy):
- *   - coverageReport(): the 66-option / per-group coverage guard, incl. that it
- *     actually FAILS on a bad set (guards against a rotted guard).
- *   - optionMatches(): the search/filter predicate.
+ * What this covers:
+ *   - coverageReport(): the 66-option / per-group check, including that it
+ *     really does fail on a bad set rather than rubber-stamping it.
+ *   - optionMatches(): the search box's matching rule.
  *   - datatypeFor(): the type/bounds -> LuCI datatype mapping.
  *   - OPTIONS names are exactly the 66 names in docs/uci-option-schema.tsv.
  *
- * What is deliberately NOT tested here: the form.Map / TypedSection / tab
- * declarations and the DOM show/hide glue in overview.js. Those are LuCI
- * framework wiring (declarative) and are exercised end-to-end by the task 11/12
- * Playwright suite, not unit tests.
+ * Not covered here: the form.Map / TypedSection / tab declarations and the DOM
+ * show/hide glue in overview.js. Those are LuCI framework wiring, exercised end
+ * to end by the Playwright suites instead.
  *
- * The module is a LuCI class file (returns baseclass.extend(...)); we load it by
- * wrapping the source with a stub `baseclass` whose extend() returns the plain
- * object, so we test the exact shipped source.
+ * options.js is a LuCI class file (it returns baseclass.extend(...)), so we
+ * load the shipped source with a stub `baseclass` whose extend() hands back the
+ * plain object.
  */
 
 const fs = require('fs');
@@ -134,7 +132,7 @@ test('OPTIONS names are exactly the 66 names in uci-option-schema.tsv', function
 	assert.deepStrictEqual(fromView, fromTsv);
 });
 
-/* --- checkRateOrder: the min <= base <= max promise in the Essentials help --- */
+/* --- checkRateOrder: the min <= base <= max rule the Essentials help states -- */
 
 test('checkRateOrder: a consistent trio passes', function () {
 	assert.strictEqual(mod.checkRateOrder(2000, 5000, 40000), null);

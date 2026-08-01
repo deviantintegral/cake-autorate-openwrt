@@ -4,20 +4,19 @@
 'require baseclass';
 
 /*
- * luci-app-statistics graph definition for cake-autorate  --  owned by task 6.
+ * luci-app-statistics graph definition for cake-autorate.
  *
- * luci-app-statistics auto-loads a definition from
+ * luci-app-statistics loads a definition from
  *   .../statistics/rrdtool/definitions/<plugin>.js
- * where <plugin> is the collectd plugin name that produced the RRDs. The
- * collectd exec reader (cake-autorate-collectd.sh) emits PUTVAL lines under the
- * plugin name "cake_autorate", so this file MUST be named cake_autorate.js.
- * That also sidesteps a collision with luci-app-statistics' own tail.js: the
- * data comes in under a distinct plugin name, not "tail"/"exec".
+ * where <plugin> is the collectd plugin name that produced the RRDs. The exec
+ * reader (cake-autorate-collectd.sh) emits PUTVAL lines under the plugin name
+ * "cake_autorate", so this file must be named cake_autorate.js. Using our own
+ * plugin name also keeps the data clear of luci-app-statistics' own tail.js.
  *
- * The exec reader sets the collectd plugin INSTANCE to the cake-autorate
- * instance id (e.g. "primary"), so per_instance:true draws one panel per WAN.
+ * The reader sets the collectd plugin INSTANCE to the cake-autorate instance id
+ * (e.g. "primary"), so per_instance:true draws one panel per WAN.
  *
- * Metrics (stock collectd types, so no custom types.db is required):
+ * Metrics (stock collectd types, so there is no types.db to ship):
  *   bitrate-dl_achieved / bitrate-ul_achieved   achieved rate/direction (kbit/s)
  *   bitrate-dl_shaper   / bitrate-ul_shaper      CAKE shaper rate/direction (kbit/s)
  *   gauge-dl_owd_delta_us / gauge-ul_owd_delta_us  avg one-way-delay delta (us, unbounded)

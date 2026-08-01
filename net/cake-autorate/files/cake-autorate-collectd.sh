@@ -2,7 +2,7 @@
 #
 # cake-autorate -> collectd exec reader
 # =====================================
-# Owned by task 6 (statistics). Installed to
+# Installed to
 #   /usr/libexec/collectd/cake-autorate-collectd.sh
 # and driven by the collectd `exec` plugin (see cake-autorate.collectd.conf).
 #
@@ -17,7 +17,7 @@
 #     cannot label an unknown, user-defined set of instances. exec derives the
 #     id per file at runtime.
 #
-# INPUT CONTRACT (docs/upstream-option-inventory.md section 3, verified against
+# INPUT FORMAT (docs/upstream-option-inventory.md section 3, checked against
 # upstream cake-autorate.sh:1483):
 #   A SUMMARY line has 13 "; "-separated fields; field 0 == "SUMMARY".
 #   0-based indices ( -> awk 1-based field in parentheses ):
@@ -27,17 +27,15 @@
 #     9(=$10) DL_LOAD_CONDITION      10(=$11) UL_LOAD_CONDITION
 #    11(=$12) CAKE_DL_RATE_KBPS      12(=$13) CAKE_UL_RATE_KBPS
 #   The SUMMARY_HEADER line is written WITHOUT the "TYPE; datetime; timestamp"
-#   prefix, so its field 0 is "SUMMARY_HEADER" (!= "SUMMARY") and it is ignored
-#   naturally by the exact field-0 match below.
+#   prefix, so its field 0 is "SUMMARY_HEADER" (!= "SUMMARY") and the exact
+#   field-0 match below skips it without any special case.
 #
-# EXPORTED METRICS (reusing stock collectd types so no custom types.db /
-# TypesDB wiring is required -- avoids a fragile deployment dependency):
+# EXPORTED METRICS (stock collectd types only, so there is no custom types.db to
+# ship and keep in sync):
 #   bitrate-dl_achieved     bitrate-ul_achieved     achieved rate/direction (kbit/s)
 #   bitrate-dl_shaper       bitrate-ul_shaper        CAKE shaper rate/direction (kbit/s)
 #   gauge-dl_owd_delta_us   gauge-ul_owd_delta_us    avg OWD delta/direction (us)
 #   gauge-dl_load           gauge-ul_load            load/bufferbloat state (see mapping)
-# OWD delta uses the UNBOUNDED `gauge` type (not `delay`, which clamps to +/-1e6
-# and would drop severe-bufferbloat samples).
 #
 # LOAD-CONDITION STRING -> NUMERIC GAUGE MAPPING:
 #     dl_idle / ul_idle  -> 0   (connection idle)
@@ -47,7 +45,7 @@
 #       *_idle_bb -> 10   *_low_bb -> 11   *_high_bb -> 12
 #     anything unrecognised -> -1
 #   So a value >= 10 means "bufferbloat currently flagged"; value % 10 is the
-#   load level 0/1/2. Keep this identical to the status backend (task 8), which
+#   load level 0/1/2. Keep this identical to the rpcd status backend, which
 #   parses the same field.
 #
 # MODES:
@@ -99,10 +97,9 @@ emit_metrics() {
 		{
 			put("bitrate-dl_achieved", $4)
 			put("bitrate-ul_achieved", $5)
-			# OWD delta uses the UNBOUNDED gauge type, not delay: the stock
-			# collectd delay type clamps to +/-1e6, which would silently drop
-			# severe-bufferbloat samples above 1,000,000 us -- exactly when the
-			# graph matters most. gauge is U:U so the spike is recorded.
+			# gauge, not delay: the delay type clamps to +/-1e6, which would
+			# silently drop OWD samples above 1,000,000 us -- exactly the
+			# bufferbloat spikes the graph exists to show. gauge is U:U.
 			put("gauge-dl_owd_delta_us", $8)
 			put("gauge-ul_owd_delta_us", $9)
 			put("gauge-dl_load",       loadnum($10))
@@ -121,11 +118,10 @@ process_file() {
 	inst=$(instance_id_from_path "$logf")
 	[ -n "$inst" ] || return 0
 
-	# Only the NEWEST SUMMARY is reported, and SUMMARY lines are frequent (one per
-	# processed ping response), so bound the read with `tail` first instead of
-	# grepping the whole file -- the log is clamped up to 100 MB and this runs
-	# every interval as `nobody` on a possibly low-power router. Mirrors the
-	# bounded read the rpcd status path uses on the same log.
+	# Only the newest SUMMARY is reported, and there is one per processed ping
+	# response, so `tail` first rather than grepping the whole file: the log can
+	# reach 100 MB and this runs every interval as `nobody`, possibly on a
+	# low-power router. The rpcd status path reads the same log the same way.
 	line=$(tail -n 1000 "$logf" 2>/dev/null | grep '^SUMMARY; ' | tail -n 1)
 	if [ -z "$line" ] && [ -f "$logf.old" ]; then
 		line=$(tail -n 1000 "$logf.old" 2>/dev/null | grep '^SUMMARY; ' | tail -n 1)

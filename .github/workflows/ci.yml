@@ -7,10 +7,10 @@
 #               noarch, so there is NO per-arch matrix), .apk files uploaded as
 #               the `cake-autorate-apks` artifact. `release.yml` calls the same
 #               workflow on a v* tag, so a release ships what CI tested.
-#   integration Boot the task-10 QEMU/KVM VM harness against the built apks.
+#   integration Boot the QEMU/KVM VM harness against the built apks.
 #               needs: build.
-#   ui          Run the task-11 functional + task-12 visual Playwright suites and
-#               publish the human-review gallery. needs: build.
+#   ui          Run the functional + visual Playwright suites and publish the
+#               review gallery. needs: build.
 #
 # KVM policy: GitHub-hosted `ubuntu-*` runners DO expose /dev/kvm (nested virt),
 # so integration + ui-serve normally run for real. When a runner cannot
@@ -66,7 +66,7 @@ jobs:
     uses: ./.github/workflows/build.yml
 
   # ---------------------------------------------------------------------------
-  # INTEGRATION — boot the task-10 VM harness against the built apks (needs KVM).
+  # INTEGRATION — boot the VM harness against the built apks (needs KVM).
   # ---------------------------------------------------------------------------
   integration:
     name: VM integration harness
@@ -170,7 +170,7 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # UI — task-11 functional + task-12 visual Playwright suites + review gallery.
+  # UI — functional + visual Playwright suites, plus the review gallery.
   # ---------------------------------------------------------------------------
   ui:
     name: LuCI UI (Playwright functional + visual + gallery)

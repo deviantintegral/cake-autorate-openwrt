@@ -10,12 +10,11 @@
  *                          with a known root password, and forward guest :80 to
  *                          a host port. This is the default CI path.
  *
- * Writes ./.runtime/serve-state.json describing the endpoint (or {available:false}
- * when none could be brought up -- e.g. no KVM). The login fixture reads it and
- * specs self-skip when unavailable, so a runner without KVM is a SKIP, not a
- * failure. globalTeardown reads the same file to tear the VM down.
- *
- * This module is REUSED verbatim by task 12's visual suite (same config).
+ * Writes ./.runtime/serve-state.json describing the endpoint, or
+ * {available:false} when none could be brought up (e.g. no KVM). The login
+ * fixture reads it and the specs skip themselves when nothing is available, so
+ * a runner without KVM is a skip rather than a failure. globalTeardown reads
+ * the same file to shut the VM down.
  */
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -41,14 +40,14 @@ function writeState(obj) {
 }
 
 /*
- * Record "no live LuCI" and decide whether that is a SKIP or a hard FAILURE.
+ * Record "no live LuCI" and decide whether that is a skip or a failure.
  *
- * A runner without KVM legitimately cannot boot the VM, and there the specs
- * self-skip so the pipeline stays green-or-skipped. But when the caller has
- * declared CA_IT_REQUIRE_KVM=1 (as CI does) it is asserting that a live run MUST
- * happen -- so any reason the endpoint failed to come up (no KVM, missing apks,
- * a boot error) has to fail the run. Without this, an infra breakage silently
- * skips every spec and the suite still exits 0, which reads exactly like a pass.
+ * A runner without KVM genuinely cannot boot the VM, and there the specs skip
+ * themselves so the pipeline stays green-or-skipped. But CA_IT_REQUIRE_KVM=1
+ * (which CI sets) means a live run has to happen, so any reason the endpoint
+ * did not come up -- no KVM, missing apks, a boot error -- fails the run.
+ * Without this a broken environment skips every spec and the suite still exits
+ * 0, which looks exactly like a pass.
  */
 function unavailable(state, message) {
   writeState({ available: false, external: false, serve_log: SERVE_LOG, ...state });

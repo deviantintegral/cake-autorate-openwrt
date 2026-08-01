@@ -2,11 +2,10 @@
 /*
  * Shared Playwright config for the luci-app-cake-autorate UI suites.
  *
- * Task 11 (this file) establishes it and adds the "functional" project.
- * Task 12 REUSES this exact config and adds a "visual" project for screenshot
- * diffs -- which is why the viewport + deviceScaleFactor are pinned HERE, at the
- * top-level `use`, so every project renders identically and visual baselines are
- * stable. Do not move rendering-affecting settings into the functional project.
+ * The functional and visual projects share it, which is why the viewport and
+ * deviceScaleFactor are pinned here in the top-level `use`: every project then
+ * renders identically and the visual baselines stay stable. Do not move
+ * anything that affects rendering into an individual project.
  *
  * Live LuCI endpoint:
  *   - globalSetup (./global-setup.js) boots the tests/integration VM in --serve
@@ -36,20 +35,21 @@ module.exports = defineConfig({
   timeout: 90 * 1000,
   expect: {
     timeout: 20 * 1000,
-    // Task 12 visual-regression defaults. Rendering-affecting knobs live here (and
-    // in the top-level `use` viewport pin) so every screenshot is deterministic:
-    //  - animations/caret off  -> no blinking-cursor or transition frames leak in;
-    //  - scale css              -> device-independent pixels (we already pin DSR=1);
-    //  - a tiny pixel tolerance -> absorbs sub-pixel font AA jitter between two
-    //    independent VM boots without hiding real structural change.
+    // Visual-regression defaults. Everything that affects rendering lives here
+    // (and in the top-level `use` viewport pin) so screenshots come out the same
+    // every time:
+    //  - animations/caret off  -> no blinking cursor or transition frames;
+    //  - scale css              -> device-independent pixels (DSR is pinned to 1);
+    //  - a small pixel tolerance -> absorbs font anti-aliasing jitter between two
+    //    VM boots without hiding a real change.
     //
-    // The tolerance was 0.02, which is not "tiny": 2% of a 1280x900 page is
-    // ~23,000 pixels, and a line of text is ~3,000. It hid a real change --
-    // rewording the filter placeholder left `config-empty` reporting a match, so
-    // --update-snapshots did not rewrite it and the committed baseline went
-    // stale. 0.002 still absorbs anti-aliasing jitter across two independent VM
-    // boots (verified by regenerating every baseline on one boot and passing
-    // them on the next) while a changed line of text now fails.
+    // The tolerance used to be 0.02, which is not small: 2% of a 1280x900 page is
+    // ~23,000 pixels and a line of text is ~3,000. It hid a real change --
+    // rewording the filter placeholder still counted as a match, so
+    // --update-snapshots left the committed `config-empty` baseline stale. 0.002
+    // still absorbs anti-aliasing jitter across two VM boots (checked by
+    // regenerating every baseline on one boot and passing them on the next),
+    // and a changed line of text now fails.
     toHaveScreenshot: {
       animations: 'disabled',
       caret: 'hide',
@@ -65,7 +65,7 @@ module.exports = defineConfig({
   use: {
     browserName: 'chromium',
     headless: true,
-    // Pinned for deterministic rendering / stable task-12 visual diffs.
+    // Pinned so rendering, and therefore the visual diffs, stay stable.
     viewport: { width: 1280, height: 900 },
     deviceScaleFactor: 1,
     ignoreHTTPSErrors: true,
@@ -82,20 +82,20 @@ module.exports = defineConfig({
       testDir: path.join(__dirname, 'functional'),
     },
     {
-      // Task 12: full-page screenshot diffs. Reuses the SAME globalSetup/teardown
-      // (one live LuCI), the SAME login fixture, and the SAME pinned engine +
-      // viewport + deviceScaleFactor from `use` above -- that pinning is what makes
-      // the committed baselines under visual/*-snapshots/ reproducible.
+      // Full-page screenshot diffs. Shares the globalSetup/teardown (one live
+      // LuCI), the login fixture, and the pinned engine, viewport and
+      // deviceScaleFactor from `use` above -- that pinning is what makes the
+      // committed baselines under visual/*-snapshots/ reproducible.
       name: 'visual',
       testDir: path.join(__dirname, 'visual'),
     },
     {
-      // Documentation screenshots. Writes curated, UNMASKED PNGs into
-      // docs/images/ rather than comparing against baselines -- see
-      // docs/screenshots.spec.js for why the visual/ baselines cannot serve as
-      // documentation. Run on demand (`--project=docs`); CI names the
-      // functional and visual projects explicitly, so this never runs there and
-      // never rewrites committed images unattended.
+      // Documentation screenshots. Writes unmasked PNGs into docs/images/
+      // instead of comparing against baselines -- docs/screenshots.spec.js
+      // explains why the visual/ baselines cannot serve as documentation. Run
+      // on demand with `--project=docs`; CI names the functional and visual
+      // projects explicitly, so this never runs there and never rewrites the
+      // committed images behind anyone's back.
       name: 'docs',
       testDir: path.join(__dirname, 'docs'),
     },

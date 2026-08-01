@@ -1,19 +1,20 @@
 'use strict';
 /*
- * Visual regression -- CONFIG FORM (task 7 page): overview.js.
+ * Visual regression for the config form (overview.js).
  *
- * A single serial flow walks the instance set through every state the acceptance
- * criteria call for, screenshotting each:
+ * One serial flow walks the instance set through each state, screenshotting as
+ * it goes:
  *   multi-instance  ->  single instance + each group tab  ->  empty  ->  post Save&Apply
  *
- * It runs AFTER 01-status-view.spec.js (file-name order, workers:1) so the status
- * baselines are captured against the pristine seeded VM before this spec starts
- * mutating instances. The VM is ephemeral (torn down by globalTeardown), so the
- * destructive deletes here are safe -- nothing runs after this file.
+ * It runs after 01-status-view.spec.js (file-name order, workers:1) so the
+ * status baselines are captured against the freshly seeded VM before this spec
+ * starts changing instances. The VM is thrown away by globalTeardown, so the
+ * deletes here are safe -- nothing runs after this file.
  *
- * The config form has no data-live cells, so the (always-applied) live mask is a
- * no-op here; screenshots are deterministic because the seeded UCI + the values
- * we set explicitly are fixed, and the engine/viewport are pinned in config.
+ * The config form has no data-live cells, so the live mask does nothing here.
+ * The screenshots still come out the same every time because the seeded UCI and
+ * the values we set are fixed, and the engine and viewport are pinned in the
+ * config.
  */
 const { test, expect, luciBeforeEach } = require('../fixtures/luci');
 const {

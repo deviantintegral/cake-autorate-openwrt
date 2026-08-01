@@ -1,19 +1,17 @@
 #!/bin/sh
-# Regression guard for the on-device libuci path in the config bridge (task 4)
-# and the rpcd backend (task 8).
+# Guards the on-device libuci path in the config bridge and the rpcd backend.
 #
-# BUG (found by the task-10 VM run): both scripts run `set -u`, then source
-# OpenWrt's /lib/functions.sh and call config_load/config_foreach. Those helpers
-# are NOT nounset-clean (they reference unbound vars like CONFIG_LIST_STATE), so
-# under `set -u` they abort mid-load. The off-device unit tests never caught it
-# because they exercise the --uci-file / CAKE_AUTORATE_INSTANCES override paths,
-# which bypass libuci entirely. On real hardware the bridge generated no config
-# and the service refused to start.
+# The bug, found by the VM run: both scripts run `set -u`, then source OpenWrt's
+# /lib/functions.sh and call config_load/config_foreach. Those helpers read
+# unbound variables like CONFIG_LIST_STATE, so under `set -u` they abort
+# mid-load. The off-device unit tests missed it because they go through the
+# --uci-file / CAKE_AUTORATE_INSTANCES overrides, which never touch libuci. On
+# real hardware the bridge generated no config and the service refused to start.
 #
-# This test drives the REAL libuci code path of each script against a
-# deliberately nounset-HOSTILE stub functions.sh (referencing an unbound var at
-# source time, exactly like the real one). Before the fix these abort and
-# produce empty output; after the `set +u` fix they must work.
+# This test drives the real libuci path of each script against a stub
+# functions.sh that reads an unbound variable at source time, just like the real
+# one does. Before the fix these abort and produce nothing; with the `set +u`
+# fix they must work.
 set -u
 
 here=$(CDPATH='' cd "$(dirname "$0")" && pwd)
@@ -30,12 +28,12 @@ ok()   { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
 bad()  { fail=$((fail + 1)); printf 'FAIL %s\n' "$1"; }
 
 # ---------------------------------------------------------------------------
-# A nounset-hostile stand-in for /lib/functions.sh. Referencing $UCI_UNBOUND
-# with a bare `: "$UCI_UNBOUND"` (no :- default) aborts immediately when the
-# sourcing shell has `set -u` in effect -- reproducing the real failure. It also
-# provides just enough of the config_* API for the two callers, itself touching
-# an unbound var inside config_foreach to prove the relaxation spans the whole
-# interaction, not just the source line.
+# A stand-in for /lib/functions.sh that trips over nounset. A bare
+# `: "$UCI_UNBOUND"` with no :- default aborts as soon as a shell with `set -u`
+# sources it, which is the real failure. It also provides just enough of the
+# config_* API for the two callers, and reads another unbound variable inside
+# config_foreach so we know `set +u` covers the whole interaction, not just the
+# source line.
 # ---------------------------------------------------------------------------
 cat > "$work/functions.sh" <<'STUB'
 : "$UCI_UNBOUND"          # aborts here under `set -u` if nounset is not relaxed
@@ -112,8 +110,8 @@ else
 fi
 
 # ===========================================================================
-# 3. Structural guard: both libuci blocks keep `set +u` before sourcing
-#    functions.sh (cheap backstop if someone reworks the code).
+# 3. Both libuci blocks still have `set +u` before sourcing functions.sh --
+#    a cheap backstop if someone reworks the code.
 # ===========================================================================
 if awk '/^stream_from_libuci\(\)/{f=1} f&&/set \+u/{ok=1} f&&/\. "\$\{CAKE_AUTORATE_FUNCTIONS_SH/{print (ok?"Y":"N"); exit}' "$bridge" | grep -q Y; then
 	ok "bridge: set +u precedes the functions.sh source"

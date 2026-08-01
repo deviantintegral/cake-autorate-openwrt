@@ -2,28 +2,26 @@
 'use strict';
 
 /*
- * Unit tests for the CUSTOM client-side logic in
+ * Unit tests for the logic we wrote in
  *   htdocs/luci-static/resources/cake-autorate/live.js
  *
  * live.js holds the pure helpers shared by the status view
- * (view/cake-autorate/status.js) and the SQM interface validation wired into
- * overview.js. These are the non-framework, decision-bearing bits the test
- * philosophy asks us to cover:
- *   - statusRow()/statusRows(): shaping the rpcd `status` JSON into a stable row
- *     model, including the available:false ("no data yet" / "stopped") path.
+ * (view/cake-autorate/status.js) and the SQM interface checks in overview.js.
+ * The parts worth testing are the ones that make decisions:
+ *   - statusRow()/statusRows(): turning the rpcd `status` JSON into rows,
+ *     including the available:false ("no data yet" / "stopped") path.
  *   - formatUptime(): seconds -> human string.
  *   - interfaceChoices(): pulling dl/ul choice lists out of `sqm_interfaces`.
- *   - interfaceStatus(): the mismatch decision that drives the visible warning
- *     on dl_if/ul_if (the core "bind interfaces to the qdisc SQM built" logic).
+ *   - interfaceStatus(): the decision behind the dl_if/ul_if warning, i.e.
+ *     whether the chosen interface really has the qdisc SQM built.
  *
- * Deliberately NOT tested here: the poll.add/rpc.declare wiring, the DOM table
- * build, and the CBI combobox declaration -- framework glue exercised by the
- * task 11 (Playwright) and task 10 (VM) suites.
+ * Not tested here: the poll.add/rpc.declare wiring, the DOM table build and the
+ * CBI combobox declaration. Those are LuCI framework glue, covered end to end
+ * by the Playwright and VM suites.
  *
- * The module is a LuCI class file (returns baseclass.extend(...)); we load it by
- * wrapping the source with a stub `baseclass` whose extend() returns the plain
- * object, so we test the exact shipped source (same pattern as
- * options-coverage.test.js).
+ * live.js is a LuCI class file (it returns baseclass.extend(...)), so we load
+ * the shipped source with a stub `baseclass` whose extend() hands back the
+ * plain object. Same trick as options-coverage.test.js.
  */
 
 const fs = require('fs');
@@ -142,7 +140,7 @@ test('interfaceChoices: missing arrays -> empty lists', function () {
 	assert.deepStrictEqual(mod.interfaceChoices(null), { dl: [], ul: [] });
 });
 
-/* ---- interfaceStatus (the mismatch decision) ---------------------------- */
+/* ---- interfaceStatus ---------------------------------------------------- */
 const SQM = {
 	sqm_config_present: true,
 	egress_choices: ['eth1'],

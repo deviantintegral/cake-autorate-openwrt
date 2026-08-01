@@ -1,15 +1,15 @@
 # Multi-instance fixture: two cake-autorate instances on one router.
 #
-# Proves the schema needs no shared/global section -- each instance is a named
+# Shows the schema needs no shared/global section: each instance is a named
 # section and the name is the instance id, so the generated daemon configs
 # (/etc/cake-autorate/config.<name>.sh) and the log files
 # (/var/log/cake-autorate.<name>.log) cannot collide.
 #
-# 'wan_dsl' is fully specified; 'wan_lte' is sparse -- it sets only the
-# Essentials and inherits everything else. Both shapes must be legal.
+# 'wan_dsl' sets everything; 'wan_lte' sets only the Essentials and takes the
+# defaults for the rest. Both must be legal.
 #
-# Also used by task 4's bridge tests (two enabled instances -> two config
-# files) and by the task 10 VM run.
+# The bridge tests (two enabled instances -> two config files) and the VM run
+# use this fixture too.
 
 config cake-autorate 'wan_dsl'
 	option enabled '1'

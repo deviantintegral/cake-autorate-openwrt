@@ -1,15 +1,15 @@
 #!/bin/sh
 # cake-autorate OpenWrt VM integration harness -- entrypoint.
 #
-#   ./tests/integration/run.sh              # full run, exits 0 + prints PASS
-#   ./tests/integration/run.sh --negative   # misconfigured run, exits NON-ZERO
-#                                           # (proves the assertions have teeth)
+#   ./tests/integration/run.sh              # full run, exits 0 and prints PASS
+#   ./tests/integration/run.sh --negative   # broken config, exits NON-ZERO
+#                                           # (shows the checks have teeth)
 #
-# Boots a PINNED OpenWrt 25.12.5 x86-64 VM under QEMU/KVM, installs the built
-# .apk packages + sqm-scripts + deps, applies a two-instance cake-autorate
-# config over two SQM CAKE WANs, induces download load so the control loop moves
-# the CAKE bandwidth, and asserts the outcomes. Evidence lands in
-# tests/integration/artifacts/ (gitignored).
+# Boots a pinned OpenWrt 25.12.5 x86-64 VM under QEMU/KVM, installs the built
+# .apk packages plus sqm-scripts and its dependencies, applies a two-instance
+# cake-autorate config over two SQM CAKE WANs, puts a download load on it so the
+# control loop moves the CAKE bandwidth, and checks the outcome. Evidence lands
+# in tests/integration/artifacts/ (gitignored).
 #
 # NO KVM: if /dev/kvm is absent/unusable the harness prints
 #   INTEGRATION_SKIPPED: no KVM
@@ -38,11 +38,11 @@ APK_DIR="${CA_IT_APK_DIR:-/tmp/owrt-sdk/openwrt-sdk-${IMG_VER}-x86-64_gcc-14.3.0
 NEG=""
 SERVE=""
 [ "${1:-}" = "--negative" ] && NEG="--negative"
-# --serve: opt-in live-LuCI mode for the tests/ui Playwright suite. Boots +
-# installs + configures exactly like a positive run, then brings up LuCI and
-# STAYS UP (LuCI reachable on a forwarded host port) until a stop-file appears.
-# It does NOT run the PASS/FAIL assertion suite, so it cannot change run.sh's
-# normal verdict semantics. Controlled entirely by CA_UI_* env vars:
+# --serve: opt-in live-LuCI mode for the tests/ui Playwright suites. Boots,
+# installs and configures exactly like a normal run, then brings up LuCI and
+# stays up, reachable on a forwarded host port, until a stop-file appears. It
+# runs none of the pass/fail checks, so it cannot change what run.sh normally
+# reports. Controlled entirely by CA_UI_* env vars:
 #   CA_UI_SERVE_PORT     host port that forwards to guest :80  (default 8080)
 #   CA_UI_SERVE_HOST     host bind address                     (default 127.0.0.1)
 #   CA_UI_ROOT_PASSWORD  root password set for LuCI login      (default cakeautorate)
@@ -53,11 +53,11 @@ SERVE=""
 log() { printf '%s\n' "== $* ==" >&2; }
 
 # ---- KVM gate -------------------------------------------------------------
-# Read/write, not just existence: on a stock GitHub-hosted runner /dev/kvm is
-# present but root:kvm 0660, so an `-e` test passes and QEMU then dies with
-# EACCES -- which reads as a harness failure rather than "this box cannot
-# virtualize". CI installs a udev rule to make it 0666; this gate is what keeps
-# the distinction honest anywhere else.
+# Test read/write, not just existence: on a stock GitHub-hosted runner /dev/kvm
+# exists but is root:kvm 0660, so an `-e` test passes and QEMU then dies with
+# EACCES, which looks like a harness failure rather than "this box cannot
+# virtualize". CI installs a udev rule to make it 0666; this check keeps the two
+# apart everywhere else.
 if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ] || ! qemu-system-x86_64 --version >/dev/null 2>&1; then
 	if [ "${CA_IT_REQUIRE_KVM:-0}" = 1 ]; then
 		echo "ERROR: KVM/qemu required but unavailable" >&2
@@ -125,13 +125,12 @@ fi
 
 # ---- build the ext4 seed disk (apks + fixtures), no root/mount needed ------
 log "building seed disk"
-# Located by GLOB, never by literal filename: an apk name embeds PKG_VERSION and
-# PKG_RELEASE, and this harness has no business tracking either -- hardcoding
-# them means every version bump is also a test edit. Exactly one match per
-# package is required, so a stale apk left beside a fresh one is a loud error
-# rather than a silent install of the wrong build.
+# Found by glob, never by literal filename: an apk name embeds PKG_VERSION and
+# PKG_RELEASE, and hardcoding those makes every version bump a test edit. Exactly
+# one match per package is required, so a stale apk sitting beside a fresh one is
+# a loud error rather than a quiet install of the wrong build.
 #
-# `cake-autorate-*.apk` cannot catch the LuCI package: globs anchor at the start
+# `cake-autorate-*.apk` cannot catch the LuCI package: globs match from the start
 # of the name and that one begins "luci-app-".
 find_one_apk() {
 	pat=$1
