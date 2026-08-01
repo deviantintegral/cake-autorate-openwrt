@@ -1,7 +1,7 @@
 # Configuration reference
 
 How to configure cake-autorate through UCI (`/etc/config/cake-autorate`) and the
-LuCI UI (**Network → Cake Autorate**). Every option here is one of the 66 the
+LuCI UI (**Network → CAKE Autorate**). Every option here is one of the 66 the
 upstream daemon actually implements; see
 [`upstream-option-inventory.md`](upstream-option-inventory.md),
 [`uci-schema.md`](uci-schema.md) and

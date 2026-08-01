@@ -78,8 +78,8 @@ module.exports = async function globalSetup() {
       external: true,
       base_url: base,
       luci_url: base + '/cgi-bin/luci/',
-      overview_path: '/cgi-bin/luci/admin/services/cake-autorate/overview',
-      status_path: '/cgi-bin/luci/admin/services/cake-autorate/status',
+      overview_path: '/cgi-bin/luci/admin/network/cake-autorate/overview',
+      status_path: '/cgi-bin/luci/admin/network/cake-autorate/status',
       username: process.env.CA_UI_USERNAME || 'root',
       password: process.env.CA_UI_ROOT_PASSWORD || '',
     });

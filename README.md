@@ -26,14 +26,14 @@ single build serves every target.
 
 ## What it looks like
 
-**Network → Cake Autorate → Configuration.** A fresh instance needs only its two
+**Network → CAKE Autorate → Configuration.** A fresh instance needs only its two
 interfaces and the min/base/max rates; the interface pickers are populated from
 the live SQM config and confirm what they are backed by:
 
 ![The Essentials tab of the LuCI configuration form, showing the DL/UL interface
 pickers with their SQM validation hints and the six shaper-rate fields](docs/images/config-essentials.png)
 
-**Network → Cake Autorate → Status.** A live per-instance readout, refreshed
+**Network → CAKE Autorate → Status.** A live per-instance readout, refreshed
 every 3 seconds from the running daemon, with start/stop/restart controls per
 instance and for the service as a whole:
 
@@ -165,12 +165,24 @@ work — that needs a signed package index, which this feed does not publish.
 `kmod-sched-cake`, **`sqm-scripts`** and `collectd-mod-exec`.
 
 After installing, configure at least one instance's interfaces and rates
-(LuCI → **Network → Cake Autorate**, or edit `/etc/config/cake-autorate`), set
+(LuCI → **Network → CAKE Autorate**, or edit `/etc/config/cake-autorate`), set
 `option enabled '1'`, and start it:
 
 ```sh
 /etc/init.d/cake-autorate enable
 /etc/init.d/cake-autorate start
+```
+
+### If the LuCI menu entry does not appear
+
+Every node in the menu is gated on this package's ACL file
+(`/usr/share/rpcd/acl.d/luci-app-cake-autorate.json`), which rpcd reads at
+startup and at login. The postinst that LuCI's build system generates already
+runs `/etc/init.d/rpcd reload`; if the entry is still missing, restart rpcd and
+log back in:
+
+```sh
+/etc/init.d/rpcd restart
 ```
 
 ## Documentation

@@ -37,9 +37,9 @@ function makeLuci(state) {
     username: state.username || 'root',
     password: state.password != null ? state.password : '',
     overviewPath: state.overview_path
-      || '/cgi-bin/luci/admin/services/cake-autorate/overview',
+      || '/cgi-bin/luci/admin/network/cake-autorate/overview',
     statusPath: state.status_path
-      || '/cgi-bin/luci/admin/services/cake-autorate/status',
+      || '/cgi-bin/luci/admin/network/cake-autorate/status',
     url(p) {
       if (!p) return baseUrl + '/';
       return baseUrl + (p.startsWith('/') ? p : '/' + p);
