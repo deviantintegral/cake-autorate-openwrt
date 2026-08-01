@@ -144,6 +144,13 @@ fail until a human refreshes the hash; the PR body carries the checklist. If you
 add a new place that names either version, add a matching pattern to
 `renovate.json` — and keep it non-overlapping with the existing ones.
 
+**Every `uses:` is pinned to a commit sha, with the version in a trailing
+comment.** A tag is a mutable pointer, and `release.yml` is the one job that
+holds `contents: write` — a retagged action would be running with it. Add new
+steps the same way (`owner/action@<sha> # vX.Y.Z`); Renovate moves the sha and
+the comment together on a version bump, and routes a sha-only move to the
+dependency dashboard for review rather than automerging it.
+
 **Never hardcode an apk filename.** `cake-autorate-<PKG_VERSION>-r<PKG_RELEASE>.apk`
 moves whenever either field does, so the test harness and the release job locate
 the packages by glob (`cake-autorate-*.apk`, `luci-app-cake-autorate-*.apk` —

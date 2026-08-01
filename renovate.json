@@ -1,7 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
   ],
   "internalChecksFilter": "strict",
   "minimumReleaseAge": "3 days",
@@ -108,7 +109,7 @@
       "automergeType": "pr"
     },
     {
-      "description": "Pure digest moves: no release timestamp to age against, so always review",
+      "description": "Pure digest moves: a tag that now resolves to a different commit is the shape a retag attack takes, and there is no release timestamp for minimumReleaseAge to bite on, so these never automerge. `helpers:pinGitHubActionDigests` above is what puts every `uses:` on a sha in the first place -- without it this rule matches nothing.",
       "matchManagers": [
         "github-actions"
       ],
