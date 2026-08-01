@@ -1,15 +1,15 @@
 'use strict';
 /*
- * Shared LuCI test fixtures for the cake-autorate UI suites (tasks 11 & 12).
+ * Shared LuCI test fixtures for the cake-autorate UI suites.
  *
  * Exposes:
  *   - test / expect      : Playwright's, extended with a `luci` helper fixture.
- *   - luciBeforeEach     : a beforeEach body that (a) SKIPS the test when no live
- *                          LuCI was brought up (e.g. no KVM) and (b) logs the
- *                          page into LuCI. Each spec does:
+ *   - luciBeforeEach     : a beforeEach body that skips the test when no live
+ *                          LuCI came up (e.g. no KVM), then logs the page in.
+ *                          Each spec does:
  *                              test.beforeEach(luciBeforeEach);
- *   - login(page, state) : the raw login routine (drives the real LuCI login
- *                          form, so the CSRF token is submitted for us).
+ *   - login(page, state) : the login routine itself, driving the real LuCI
+ *                          login form so the CSRF token is submitted for us.
  *
  * The live endpoint + credentials come from ./.runtime/serve-state.json, written
  * by global-setup.js (VM --serve) or from CA_UI_BASE_URL (external endpoint).
@@ -89,8 +89,8 @@ const test = base.test.extend({
 
 /*
  * beforeEach body shared by every spec: skip when there is no live LuCI, else
- * authenticate the page. Kept as an exported function (not a module-level
- * test.beforeEach) so each spec registers it in its own file scope.
+ * log the page in. Exported as a function rather than registered here, so each
+ * spec hooks it up in its own file scope.
  */
 async function luciBeforeEach({ page }) {
   const state = readState();

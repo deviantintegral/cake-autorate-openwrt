@@ -1,22 +1,22 @@
 #!/bin/sh
 #
-# test-uci-schema.sh -- verification gate for the UCI schema (plan 01 / task 3).
+# test-uci-schema.sh -- tests the UCI schema without needing a router.
 #
-# Proves, without needing a router:
+# It checks that:
 #   1. the shipped /etc/config/cake-autorate is valid UCI grammar;
-#   2. it covers EXACTLY the 66 upstream options in docs/upstream-option-inventory.md
-#      -- no missing option, no invented option (a single unknown key is fatal
-#      to the daemon: see inventory section 2.2);
+#   2. it covers exactly the 66 upstream options in
+#      docs/upstream-option-inventory.md -- nothing missing, nothing invented
+#      (one unknown key kills the daemon: see inventory section 2.2);
 #   3. the schema metadata (docs/uci-option-schema.tsv) agrees with the
 #      inventory on names and types, and with the shipped config on values;
-#   4. every default is lexically valid for its upstream `typeof` class --
-#      floats carry a decimal point, integers do not, bools are 0/1, and the
-#      three must-not-be-empty strings are non-empty (inventory section 2.3);
-#   5. multi-instance is expressible: two named sections coexist with no
-#      shared/global section and no unknown keys.
+#   4. every default is written in a form upstream accepts -- floats carry a
+#      decimal point, integers do not, bools are 0/1, and the three
+#      must-not-be-empty strings are non-empty (inventory section 2.3);
+#   5. two named sections can coexist with no shared/global section and no
+#      unknown keys.
 #
-# `uci import` / `uci show` are NOT run here (libuci is not present on a build
-# host); that device-side check belongs to the task-10 VM harness.
+# `uci import` / `uci show` are not run here, since libuci is not present on a
+# build host; the VM harness covers that on-device.
 #
 # Usage:
 #   tests/schema/test-uci-schema.sh [--upstream /path/to/defaults.sh]
@@ -125,7 +125,7 @@ for p in "$parsed_config" "$parsed_fixture"; do
 done
 
 # ------------------------------------------------------------ key extraction
-# Inventory option names, in document order (section 4 table).
+# Inventory option names, in the order the section 4 table lists them.
 awk -F'|' '
 	NF >= 8 {
 		num=$2; name=$3
@@ -134,7 +134,7 @@ awk -F'|' '
 		if (num ~ /^[0-9]+$/ && name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) print name
 	}' "$INVENTORY" > "$tmp/inventory.names"
 
-# Inventory types, same order, canonicalised to the schema vocabulary.
+# Inventory types, same order, renamed to match the schema's own type names.
 awk -F'|' '
 	NF >= 8 {
 		num=$2; name=$3; type=$4
@@ -176,7 +176,7 @@ if [ "$n_tsv" -eq 66 ]; then ok "metadata yields 66 option rows"; else fail "met
 
 # ---------------------------------------------------------------- check 5
 echo
-echo "== 5. bidirectional coverage (the plan's central invariant)"
+echo "== 5. every option list agrees with every other"
 if diff -u "$tmp/inventory.names" "$tmp/tsv.upstream" > "$tmp/d1"; then
 	ok "inventory option list == metadata upstream_option list (same names, same order)"
 else
@@ -223,7 +223,7 @@ fi
 
 # ---------------------------------------------------------------- check 7
 echo
-echo "== 7. defaults are lexically valid for their upstream typeof class"
+echo "== 7. defaults are written in a form upstream accepts"
 awk -F'\t' -v nonempty="$NONEMPTY_STRINGS" '
 	BEGIN {
 		n = split(nonempty, a, " ")
@@ -347,8 +347,8 @@ fi
 echo
 if [ "$fails" -eq 0 ]; then
 	echo "PASS: $checks/$checks checks passed"
-	echo "NOTE: 'uci import' / 'uci show' were not run (libuci is not available on"
-	echo "      a build host); that device-side confirmation is task 10's VM run."
+	echo "NOTE: 'uci import' / 'uci show' were not run -- libuci is not available"
+	echo "      on a build host. The VM harness confirms those on-device."
 	exit 0
 fi
 echo "FAIL: $fails of $checks checks failed"

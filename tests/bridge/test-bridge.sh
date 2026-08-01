@@ -1,36 +1,35 @@
 #!/bin/sh
 #
-# test-bridge.sh -- verification gate for the UCI -> shell config bridge
-# (plan 01 / task 4). Runs entirely off-device: no libuci, no router.
+# test-bridge.sh -- tests the UCI -> shell config bridge. Runs entirely
+# off-device: no libuci, no router.
 #
-# Proves, by running the real bridge and reading its output/exit code:
+# It runs the real bridge and reads its output and exit code to check that:
 #   1. the embedded option schema is byte-identical to docs/uci-option-schema.tsv
-#      (no runtime drift between the mapping the bridge uses and the canonical
-#      metadata);
+#      (the bridge's mapping and the documented metadata cannot drift apart);
 #   2. the two-instance fixture produces two config.<name>.sh at distinct paths;
-#   3. lexical forms are correct per type -- floats keep a decimal point,
-#      integers have none, bools normalise to 0/1, strings are shell-quoted,
+#   3. values are written correctly per type -- floats keep a decimal point,
+#      integers have none, bools become 0/1, strings are shell-quoted,
 #      reflectors become a bash array literal;
-#   4. every generated key is lexically valid for its upstream typeof class;
-#   5. type-coercion edge cases: 6.0 -> 6, 1 -> 1.0, .5 -> 0.5, truthy bool
-#      spellings -> 1, a rate unit (20mbit) -> 20000 kbps;
-#   6. invalid inputs are fatal: a non-integral integer, a negative, an empty
-#      must-not-be-empty string;
-#   7. the FORCED options win even against hostile UCI that tries to disable
-#      them (output_summary_stats=0, log_to_file=0 -> still =1);
+#   4. every generated key is written in a form upstream will accept;
+#   5. odd input converts as expected: 6.0 -> 6, 1 -> 1.0, .5 -> 0.5, truthy
+#      bool spellings -> 1, a rate unit (20mbit) -> 20000 kbps;
+#   6. bad input skips the instance: a non-integral integer, a negative, an
+#      empty must-not-be-empty string;
+#   7. the forced options win even against UCI that tries to disable them
+#      (output_summary_stats=0, log_to_file=0 -> still =1);
 #   8. IPv4 and IPv6 reflectors are accepted; an invalid reflector is dropped;
-#   9. idempotency: two runs over unchanged UCI yield byte-identical output;
+#   9. two runs over unchanged UCI give byte-identical output;
 #  10. a disabled instance is not generated, and stale configs are pruned;
-#  11. the bidirectional coverage assertion PASSES on a valid config and FAILS
-#      when the bridge is mutated to drop a key or emit a stray key.
+#  11. the coverage check passes on a valid config and fires when the bridge is
+#      mutated to drop a key or emit a stray one.
 #
 # Exit 0 = all checks passed.
 
 # SC2015: the `cond && ok "..." || fail "..."` idiom is safe here because ok()
 #         always returns 0 (its last command is printf), so fail never runs when
 #         cond succeeds.
-# SC2012: `ls` is only used to build human-readable diagnostics, never to drive
-#         logic; our test paths are alphanumeric.
+# SC2012: `ls` only builds messages for a human to read, never drives logic, and
+#         our test paths are alphanumeric.
 # shellcheck disable=SC2015,SC2012
 set -u
 
@@ -57,7 +56,7 @@ fail() { checks=$((checks + 1)); fails=$((fails + 1)); printf 'FAIL %s\n' "$*"; 
 run_bridge() { sh "$BRIDGE" "$@"; }
 
 # ------------------------------------------------------------------ check 1
-echo "== 1. embedded schema == canonical TSV (no runtime drift)"
+echo "== 1. embedded schema matches the TSV"
 run_bridge --check-schema > "$tmp/schema.embedded" 2>/dev/null
 awk -F'\t' '$0 !~ /^#/ && NF > 0 {print $1 "\t" $3 "\t" $6}' "$TSV" > "$tmp/schema.tsv"
 if diff -u "$tmp/schema.tsv" "$tmp/schema.embedded" > "$tmp/d.schema"; then
@@ -85,7 +84,7 @@ if [ "$nfiles" = 2 ]; then ok "exactly two config files (no extras)"; else fail 
 
 # ------------------------------------------------------------------ check 3
 echo
-echo "== 3. lexical forms per type (from wan_dsl)"
+echo "== 3. values are written correctly per type (from wan_dsl)"
 cfg="$out2/config.wan_dsl.sh"
 grep -q '^reflector_ping_interval_s=0\.3$' "$cfg" \
 	&& ok "float keeps its decimal point (reflector_ping_interval_s=0.3)" \
@@ -105,9 +104,9 @@ grep -q '^reflectors=( "1.1.1.1" "8.8.8.8" "9.9.9.9" "2606:4700:4700::1111" "200
 
 # ------------------------------------------------------------------ check 4
 echo
-echo "== 4. every generated key is lexically valid for its type"
-# Build a type map from the embedded schema, then validate a config that
-# exercises all 66 keys (the shipped 'primary', generated with its gate bypassed).
+echo "== 4. every generated key is written in a form upstream accepts"
+# Build a type map from the embedded schema, then check a config that uses all
+# 66 keys (the shipped 'primary', generated with its enabled gate bypassed).
 run_bridge --uci-file "$SHIPPED" --instance primary --stdout > "$tmp/primary.sh" 2>"$tmp/e4" \
 	|| { fail "could not generate the shipped primary config"; sed 's/^/     /' "$tmp/e4"; }
 awk -v schema="$tmp/schema.embedded" '
@@ -150,7 +149,7 @@ if [ "$nkeys" = 66 ]; then ok "primary emits all 66 upstream keys"; else fail "p
 
 # ------------------------------------------------------------------ check 5
 echo
-echo "== 5. type-coercion edge cases"
+echo "== 5. odd input values convert as expected"
 cat > "$tmp/edge.uci" <<'EOF'
 config cake-autorate 'edge'
 	option enabled '1'
@@ -178,12 +177,12 @@ grep -q '^base_dl_shaper_rate_kbps=20000$' "$tmp/edge.sh" && ok "rate '20mbit' -
 
 # ------------------------------------------------------------------ check 6
 echo
-echo "== 6. invalid inputs SKIP the instance (resilient: never emit a bad value,"
-echo "      never abort the whole run so other instances keep working)"
+echo "== 6. bad input skips the instance: never emit a bad value, and never"
+echo "      abort the run, so the other instances keep working"
 mk_bad() { printf "config cake-autorate 'bad'\n\toption enabled '1'\n\toption dl_if 'x'\n\toption ul_if 'y'\n%b\n" "$1" > "$tmp/bad.uci"; }
 
-# A bad value must produce NO config (the instance is skipped), the bridge must
-# still exit 0, and a skip warning must reach stderr.
+# A bad value must produce no config, the bridge must still exit 0, and a skip
+# warning must reach stderr.
 assert_skipped() {  # <label> <uci-file>
 	_out=$(run_bridge --uci-file "$2" --instance bad --stdout 2>"$tmp/e"); _rc=$?
 	if [ "$_rc" -eq 0 ] && [ -z "$_out" ] && grep -qi 'skip' "$tmp/e"; then
@@ -200,13 +199,13 @@ assert_skipped "empty dl_if (non-empty-default string)" "$tmp/bad.uci"
 printf "config cake-autorate 'bad'\n\toption enabled '1'\n\toption dl_if 'x'\n\toption ul_if 'y'\n\toption bogus_key '1'\n" > "$tmp/bad.uci"
 assert_skipped "unknown UCI key (would kill the daemon if emitted)" "$tmp/bad.uci"
 
-# A malformed `enabled` value must be treated as disabled (skipped), NOT abort.
+# A malformed `enabled` value counts as disabled; it must not abort the run.
 printf "config cake-autorate 'bad'\n\toption enabled 'ture'\n\toption dl_if 'x'\n\toption ul_if 'y'\n" > "$tmp/bad.uci"
 _out=$(run_bridge --uci-file "$tmp/bad.uci" 2>"$tmp/e"); _rc=$?
 if [ "$_rc" -eq 0 ]; then ok "malformed enabled -> treated as disabled, exit 0"
 else fail "malformed enabled -> rc=$_rc (expected 0)"; fi
 
-# RESILIENCE: one bad instance must NOT stop a second, valid instance.
+# One bad instance must not stop a second, valid one.
 printf "config cake-autorate 'good'\n\toption enabled '1'\n\toption dl_if 'ifb4eth0'\n\toption ul_if 'eth0'\n\toption min_dl_shaper_rate_kbps '2000'\nconfig cake-autorate 'broken'\n\toption enabled '1'\n\toption dl_if 'ifb4eth1'\n\toption ul_if 'eth1'\n\toption no_pingers '6.5'\n" > "$tmp/mixed.uci"
 _cfgdir=$(mktemp -d)
 run_bridge --uci-file "$tmp/mixed.uci" --config-dir "$_cfgdir" >"$tmp/e" 2>&1; _rc=$?
@@ -228,7 +227,7 @@ fi
 
 # ------------------------------------------------------------------ check 7
 echo
-echo "== 7. FORCED options win against hostile UCI"
+echo "== 7. forced options win against UCI that tries to override them"
 cat > "$tmp/hostile.uci" <<'EOF'
 config cake-autorate 'hostile'
 	option enabled '1'
@@ -277,7 +276,7 @@ grep -q "dropping invalid entry '999.1.2.3'" "$tmp/e8" && grep -q "dropping inva
 
 # ------------------------------------------------------------------ check 9
 echo
-echo "== 9. idempotency (two runs, byte-identical output)"
+echo "== 9. two runs give byte-identical output"
 a="$tmp/run_a"; b="$tmp/run_b"; mkdir -p "$a" "$b"
 run_bridge --uci-file "$FIXTURE" --config-dir "$a" 2>/dev/null
 run_bridge --uci-file "$FIXTURE" --config-dir "$b" 2>/dev/null
@@ -331,17 +330,17 @@ fi
 
 # ------------------------------------------------------------------ check 11
 echo
-echo "== 11. coverage assertion catches a mutated bridge (drop / stray key)"
-anchor='Bidirectional coverage assertion'
+echo "== 11. the coverage check catches a mutated bridge (drop / stray key)"
+anchor='----- Coverage check -----'
 # 11a: mutant that emits a stray key
 awk -v a="$anchor" '
 	index($0, a) && !done { print "\tprintf \"stray_key=1\\n\" >> \"$out\""; done=1 }
 	{ print }
 ' "$BRIDGE" > "$tmp/mut_stray.sh"
-# A mutated bridge must still have its coverage assertion FIRE (diagnostic on
-# stderr) and the affected instance must be SKIPPED (no --stdout output), rather
-# than silently emitting a daemon-fatal/incomplete config. The bridge exits 0
-# (resilient) but generates nothing for the bad instance.
+# A mutated bridge must still trip the coverage check (message on stderr) and
+# skip the affected instance (no --stdout output) rather than quietly emit an
+# incomplete config the daemon would choke on. It exits 0 but generates nothing
+# for that instance.
 _out=$(sh "$tmp/mut_stray.sh" --uci-file "$FIXTURE" --instance wan_dsl --stdout 2>"$tmp/e11a"); _rc=$?
 if [ "$_rc" -eq 0 ] && [ -z "$_out" ] && { grep -q 'only emitted' "$tmp/e11a" || grep -qi 'coverage' "$tmp/e11a"; }; then
 	ok "stray extra key -> coverage fires, instance skipped (daemon-fatal key blocked)"

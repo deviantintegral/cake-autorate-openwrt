@@ -6,29 +6,30 @@
 'require cake-autorate.live as live';
 
 /*
- * cake-autorate live status view (task 9).
+ * cake-autorate live status view.
  *
- * Polls the task-8 rpcd `status` method every few seconds and renders a
- * per-instance table of shaped-vs-achieved rates, load conditions, OWD deltas,
- * run state and uptime. Start/Stop/Restart controls invoke the `service`
- * method and trigger an immediate refresh.
+ * Polls the rpcd `status` method every few seconds and renders a per-instance
+ * table of shaped-vs-achieved rates, load conditions, OWD deltas, run state and
+ * uptime. The Start/Stop/Restart controls call the `service` method and then
+ * refresh straight away.
  *
- * The pure JSON->row-model and formatting logic lives in cake-autorate.live
- * (unit-tested under node). This file is rpc/poll/DOM wiring only.
+ * The JSON-to-row and formatting logic lives in cake-autorate.live, where it is
+ * unit-tested under node. This file is rpc/poll/DOM wiring only.
  *
- * STABLE selectors/markers for tasks 11 (assert) & 12 (mask):
+ * Selectors the Playwright suites rely on:
  *   - view root:              #cake-autorate-status
  *   - global controls:        #cake-autorate-controls
  *   - a service button:       button[data-cake-action="start|stop|restart"]
  *                             (global buttons carry data-cake-instance="";
  *                              per-instance buttons carry the instance id)
  *   - a per-instance card:    .cake-instance[data-cake-instance="<inst>"]
- *   - every DYNAMIC value:    [data-live="1"] (class .cake-live) -- task 12
- *                             masks these; each also carries data-field="<key>"
- *                             (and data-instance) so task 11 can assert them.
+ *   - every changing value:   [data-live="1"] (class .cake-live), which the
+ *                             visual suite masks. Each also carries
+ *                             data-field="<key>" and data-instance so the
+ *                             functional suite can assert on it.
  *   - the run-state badge:    .cake-live[data-field="running"]
  *   - the uptime cell:        .cake-live[data-field="uptime_s"]
- *   - the last-update cell:    .cake-live[data-field="datetime"]
+ *   - the last-update cell:   .cake-live[data-field="datetime"]
  */
 
 var POLL_INTERVAL = 3;
@@ -53,8 +54,9 @@ var ACTIONS = [
 	{ action: 'restart', title: _('Restart'), cls: '' }
 ];
 
-/* A dynamic (live) value cell/element: marked so task 12 masks it and task 11
- * asserts it. Never static text -- everything derived from `status` flows here. */
+/* A cell whose value changes on each poll. Everything derived from `status`
+ * goes through here, so the visual suite can mask it and the functional suite
+ * can find it. */
 function liveCell(tag, field, instance, content, extraAttrs) {
 	var attrs = {
 		'class': 'cake-live',
@@ -82,9 +84,8 @@ var REASON_TEXT = {
 };
 
 /*
- * fieldText(row, field) -- the single source of truth for what a data-live cell
- * displays, used by BOTH the initial card build and the in-place poll update so
- * the two can never diverge.
+ * fieldText(row, field) -- what a data-live cell displays. Used by both the
+ * initial card build and the in-place poll update, so the two cannot diverge.
  */
 function fieldText(row, field) {
 	switch (field) {
@@ -189,9 +190,9 @@ return view.extend({
 		/* Body container that the poll refreshes in place. */
 		var bodyEl = E('div', { 'id': 'cake-autorate-status-body' });
 
-		/* Structure depends only on the instance set and each instance's
-		 * availability (available => metric table, unavailable => notice);
-		 * running state and all values are updated in place. */
+		/* The page structure depends only on which instances exist and whether
+		 * each has data (metric table vs notice). Run state and every value are
+		 * updated in place. */
 		var lastSig = null;
 		function structuralSig(rows) {
 			if (!rows.length)

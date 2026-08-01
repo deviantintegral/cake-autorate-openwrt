@@ -1,28 +1,27 @@
 #!/bin/sh
 # shellcheck disable=SC3043
-# cake-autorate-bridge.sh -- UCI -> upstream per-instance shell config bridge.
-#
-# Owned by plan 01 / task 4. Installed to
-# /usr/libexec/cake-autorate/cake-autorate-bridge.sh (task 2 Makefile).
+# cake-autorate-bridge.sh -- turns UCI settings into the per-instance shell
+# config the upstream daemon reads. Installed to
+# /usr/libexec/cake-autorate/cake-autorate-bridge.sh.
 #
 # WHAT IT DOES
 #   Reads the UCI package "cake-autorate" and, for every ENABLED instance
-#   section, writes a deterministic upstream daemon config to
+#   section, writes a daemon config to
 #       <config-dir>/config.<instance>.sh        (default /etc/cake-autorate)
 #   The daemon sources defaults.sh then this file, so only the keys an instance
 #   actually sets are emitted, plus the package-managed keys (see below).
 #
-#   Section name == instance id (constrained to [A-Za-z0-9_]+). The per-instance
-#   log path the daemon derives is /var/log/cake-autorate.<instance>.log; that
-#   determinism is guaranteed here by forcing log_file_path_override="".
+#   Section name == instance id (constrained to [A-Za-z0-9_]+). The daemon
+#   derives its log path from that, /var/log/cake-autorate.<instance>.log, and
+#   forcing log_file_path_override="" here is what keeps it there.
 #
-# GUARANTEES
-#   * Deterministic + idempotent: emission order is the fixed schema order, no
-#     timestamps, so the same UCI yields byte-identical output.
-#   * Strict upstream typing (see docs/upstream-option-inventory.md 2.3):
+# WHAT IT PROMISES
+#   * Same UCI in, byte-identical file out: options are written in schema order
+#     and nothing is timestamped, so re-running changes nothing.
+#   * Upstream's strict typing (see docs/upstream-option-inventory.md 2.3):
 #       - float options carry a decimal point (1 -> 1.0, .5 -> 0.5)
-#       - integer options carry none (6.0 -> 6, 6.5 is fatal)
-#       - bool truthy/falsy spellings normalise to 0/1
+#       - integer options carry none (6.0 -> 6, 6.5 is rejected)
+#       - bool truthy/falsy spellings become 0/1
 #       - non-empty-default strings (dl_if/ul_if/pinger_binary) never blanked
 #       - reflectors emitted as a bash array literal, validated IPv4/IPv6
 #       - negatives rejected everywhere
@@ -30,11 +29,11 @@
 #   * Package-managed keys (docs/uci-schema.md section 4):
 #       - forced  : written AFTER user options with a fixed value so a user
 #                   cannot disable the log stream the LuCI status view and the
-#                   collectd tail source depend on.
+#                   collectd reader depend on.
 #       - bounded : user-settable but clamped to a sane non-zero range.
-#   * Bidirectional coverage invariant enforced in code: every UCI user option
-#     maps to exactly one emitted key, and every emitted key (minus the forced
-#     ones) maps back to a UCI option. A silent drop or a stray key is fatal.
+#   * Coverage check: every UCI option maps to exactly one emitted key, and
+#     every emitted key (bar the forced ones) maps back to a UCI option. A
+#     silent drop or a stray key skips the instance rather than shipping it.
 #
 # INVOCATION
 #   cake-autorate-bridge.sh [--config-dir DIR] [--instance NAME]
@@ -44,11 +43,11 @@
 #   (no args)         Sync all enabled instances from live UCI into the config
 #                     dir and PRUNE any stale config.*.sh whose instance is no
 #                     longer an enabled section. This is the whole-world sync
-#                     the init script (task 5) calls on start/reload.
+#                     the init script runs on start/reload.
 #   --instance NAME   Only process section NAME (implies --no-prune).
 #   --config-dir DIR  Output directory (default $CAKE_AUTORATE_CONFIG_PREFIX or
 #                     /etc/cake-autorate).
-#   --uci-file FILE   Read UCI from FILE (parsed by the task-3 grammar checker)
+#   --uci-file FILE   Read UCI from FILE (parsed by the UCI grammar checker)
 #                     instead of libuci -- for off-device tests/CI. Requires the
 #                     parser at $CAKE_AUTORATE_UCI_AWK or beside this script.
 #   --stdout          Write the (single) selected instance to stdout instead of
@@ -57,9 +56,10 @@
 #   --check-schema    Print the embedded schema (name<TAB>type<TAB>managed) and
 #                     exit; used by the test suite to prove no drift vs the TSV.
 #
-# Exit status: 0 on success; 1 on any fatal (bad type, unknown key, coverage
-# mismatch, ...). A fatal on one instance aborts the whole run so a half-written
-# config never reaches the daemon.
+# Exit status: 1 only when something stops the whole run (no UCI parser, an
+# unreadable file, an unwritable config dir). A bad value in one instance skips
+# just that instance, with a warning, and still exits 0 -- one misconfigured WAN
+# must never take the others down.
 
 set -u
 
@@ -68,20 +68,19 @@ PROG=cake-autorate-bridge
 die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
 warn() { printf '%s: %s\n' "$PROG" "$*" >&2; }
 
-# logmsg: a warning that must be VISIBLE to an operator, not just on the bridge's
-# stderr (which is swallowed when the init script runs the bridge). Mirror it to
-# syslog so it lands in `logread`. Used for user-facing config problems that the
-# bridge tolerates (a skipped instance, dropped reflectors) rather than aborts on.
+# logmsg: a warning an operator must actually see. The init script swallows the
+# bridge's stderr, so mirror it to syslog where `logread` will show it. Used for
+# config problems the bridge works around (a skipped instance, dropped
+# reflectors) rather than gives up on.
 logmsg() {
 	warn "$*"
 	command -v logger >/dev/null 2>&1 && logger -t "$PROG" -p daemon.warn "$*"
 }
 
-# section_skip: a per-section failure. It must NOT abort the whole run -- one
-# misconfigured instance may never take down the others (the main loop ignores
-# process_section's exit status, so `return 1` simply moves on to the next
-# section, and the daemon config for this instance is left ungenerated; the init
-# script's start_instance then skips it with its own warning).
+# section_skip: one section failed, the run carries on. The main loop ignores
+# process_section's exit status, so `return 1` just moves to the next section
+# and this instance gets no config; the init script's start_instance then skips
+# it with its own warning.
 section_skip() { logmsg "instance $1 skipped: $2"; }
 
 TAB=$(printf '\t')
@@ -90,10 +89,9 @@ SENTINEL='__CAKE_AUTORATE_UNSET__'
 # --------------------------------------------------------------------------
 # Embedded option schema.
 #
-# DERIVED FROM docs/uci-option-schema.tsv (columns 1=uci_option, 3=type,
-# 6=managed). Kept in lockstep by tests/bridge/test-bridge.sh --check-schema,
-# which fails the build if this table and the TSV ever diverge. Do not hand-edit
-# without regenerating from the TSV:
+# Derived from docs/uci-option-schema.tsv (columns 1=uci_option, 3=type,
+# 6=managed). tests/bridge/test-bridge.sh compares the two and fails the build
+# if they ever diverge. Do not hand-edit; regenerate from the TSV:
 #   awk -F'\t' '$0!~/^#/ && NF>0 {print $1"\t"$3"\t"$6}' docs/uci-option-schema.tsv
 # --------------------------------------------------------------------------
 _schema() {
@@ -194,15 +192,15 @@ bounded_range() {
 
 schema_type() { _schema | awk -F'\t' -v n="$1" '$1==n {print $2; exit}'; }
 
-# Space-delimited list of the 66 valid option names, parsed ONCE. The per-section
-# unknown-key check does membership against this instead of forking `_schema|awk`
-# for every option of every instance (that was ~150 short-lived procs per apply
-# on a 2-instance box).
+# Space-delimited list of the 66 valid option names, parsed once. The
+# unknown-key check looks names up in here instead of forking `_schema|awk` per
+# option per instance -- that was ~150 short-lived processes per apply on a
+# two-instance box.
 SCHEMA_NAMES=" $(_schema | cut -f1 | tr '\n' ' ')"
 
 # --------------------------------------------------------------------------
-# Value coercion. Each prints the emitted lexical form to stdout, or prints a
-# diagnostic to stderr and returns 1. Callers MUST test the return status
+# Value coercion. Each prints the value as it will be written, or prints a
+# message to stderr and returns 1. Callers MUST test the return status
 # ( out=$(coerce_int ...) || die ... ) because a bare `exit` inside $() would
 # only leave the sub-shell.
 # --------------------------------------------------------------------------
@@ -260,9 +258,9 @@ coerce_string() {
 	printf '"%s"' "$esc"
 }
 
-# Rate-unit normalisation for the *_kbps integer options: accept an optional
-# unit suffix (k/kbit/kbps, m/mbit/mbps, g/gbit/gbps, case-insensitive, optional
-# "/s") and resolve to a plain kbps integer. Bare numbers are already kbps.
+# Rate units for the *_kbps integer options: accept an optional suffix
+# (k/kbit/kbps, m/mbit/mbps, g/gbit/gbps, case-insensitive, optional "/s") and
+# convert to a plain kbps integer. A bare number is already kbps.
 normalize_rate() {
 	local n="$1" v="$2" num unit factor out
 	num=${v%%[!0-9.]*}
@@ -291,11 +289,11 @@ valid_reflector() {
 			if (o[i] == "" || length(o[i]) > 3 || o[i] + 0 > 255) return 0
 		return 1
 	}
-	# A structural IPv6 check (not just a charset match): 1-4 hex digits per
-	# group, at most one "::" zero-compression, 8 groups when uncompressed and
-	# >=1 real group when compressed. Rejects "1:2", ":", "::", "g::1", etc.
-	# (IPv4-embedded forms like ::ffff:1.2.3.4 are intentionally not accepted --
-	# reflectors are plain literals in practice.)
+	# Checks IPv6 structure, not just the character set: 1-4 hex digits per
+	# group, at most one "::", 8 groups when uncompressed and at least 1 when
+	# compressed. Rejects "1:2", ":", "::", "g::1" and friends. IPv4-embedded
+	# forms like ::ffff:1.2.3.4 are not accepted -- reflectors are plain
+	# addresses in practice.
 	function valid_ipv6(s,   tmp, dc, np, parts, i, seg, filled) {
 		if (s !~ /:/ || s ~ /:::/) return 0
 		tmp = s
@@ -337,8 +335,8 @@ emit_reflectors() {
 }
 
 # --------------------------------------------------------------------------
-# UCI stream producers. Both emit the canonical 3-column stream that the task-3
-# grammar checker prints:
+# UCI stream producers. Both emit the same 3-column stream the UCI grammar
+# checker prints:
 #     section<TAB>cake-autorate<TAB><name>
 #     option<TAB><name><TAB><value>
 #     list<TAB><name><TAB><value>
@@ -358,13 +356,12 @@ stream_from_file() {
 }
 
 stream_from_libuci() {
-	# OpenWrt's /lib/functions.sh and its config_* helpers are NOT nounset-clean
-	# -- they reference unbound variables (e.g. IPKG_INSTROOT, CONFIG_LIST_STATE)
-	# -- so the `set -u` this script runs under would abort them mid-load, leaving
-	# no config generated and the service refusing to start on a real device.
-	# Relax nounset for the duration of the libuci interaction, then restore it so
-	# the rest of the bridge keeps its strict-unset safety. (config_foreach runs
-	# _libuci_emit_section synchronously here, so it is covered too.)
+	# OpenWrt's /lib/functions.sh and its config_* helpers read unbound variables
+	# (IPKG_INSTROOT, CONFIG_LIST_STATE), so the `set -u` this script runs under
+	# aborts them mid-load: no config gets generated and the service refuses to
+	# start on a real device. Turn nounset off for the libuci calls, then back on
+	# so the rest of the bridge keeps it. config_foreach runs
+	# _libuci_emit_section synchronously, so that is covered too.
 	set +u
 	# shellcheck disable=SC1090,SC1091  # runtime path, overridable for tests
 	. "${CAKE_AUTORATE_FUNCTIONS_SH:-/lib/functions.sh}"
@@ -411,10 +408,10 @@ process_section() {
 		return 0
 	fi
 
-	# enabled gate (default off). An unparseable value is treated as DISABLED
-	# (matching the init's config_get_bool) rather than aborting the whole run,
-	# so one bad `enabled` can never stop the other instances. --stdout inspects a
-	# specific instance regardless, so it bypasses the gate.
+	# enabled gate (default off). A value we cannot parse counts as DISABLED,
+	# matching the init's config_get_bool, so one bad `enabled` cannot stop the
+	# other instances. --stdout inspects a named instance either way, so it
+	# bypasses the gate.
 	enabled_raw=$(grep -E "^option${TAB}enabled${TAB}" "$rec" | tail -n1)
 	enabled_raw=${enabled_raw#option"${TAB}"enabled"${TAB}"}
 	if ! enabled=$(coerce_bool enabled "$enabled_raw"); then
@@ -425,9 +422,9 @@ process_section() {
 		return 0
 	fi
 
-	# Unknown-key check + collect the present user-option set. `enabled` is the
-	# one package-local key and is never an upstream option. Membership is checked
-	# against the pre-parsed SCHEMA_NAMES (no per-option subprocess).
+	# Reject unknown keys and collect the options this section sets. `enabled` is
+	# the one package-local key and is never an upstream option. Names are looked
+	# up in the pre-parsed SCHEMA_NAMES, so there is no per-option subprocess.
 	present=$(awk -F'\t' -v s="$SENTINEL" '
 		($1=="option" || $1=="list") && $2!="enabled" { print $2 }
 	' "$rec" | sort -u)
@@ -447,7 +444,7 @@ process_section() {
 		printf '# Regenerate: /etc/init.d/cake-autorate reload\n'
 	} > "$out"
 
-	# Pass 1: user + bounded options, in fixed schema order (determinism).
+	# Pass 1: user + bounded options, in schema order so the output never varies.
 	_schema | while IFS="$TAB" read -r t_name t_type t_managed; do
 		[ "$t_managed" = forced ] && continue
 
@@ -456,10 +453,10 @@ process_section() {
 			vals=$(awk -F'\t' -v n="$t_name" '$1=="list" && $2==n {print $3}' "$rec")
 			[ -n "$vals" ] || continue
 			if ! line=$(printf '%s\n' "$vals" | emit_reflectors); then
-				# Every entry was invalid. Rather than abort the whole run (which
-				# would stop every OTHER instance too), drop the option so the
-				# daemon falls back to its built-in default reflectors, and record
-				# the omission so the coverage assertion does not flag it.
+				# Every entry was invalid. Aborting would stop every other
+				# instance too, so drop the option instead and let the daemon use
+				# its built-in reflectors. Record the omission so the coverage
+				# check below does not flag it.
 				logmsg "$name: no valid $t_name entries; falling back to daemon defaults"
 				printf '%s\n' "$t_name" >> "$DROPPED"
 				continue
@@ -468,7 +465,7 @@ process_section() {
 			continue
 		fi
 
-		# scalar: present iff a matching option line exists (empty value allowed)
+		# scalar: set only if a matching option line exists (empty value allowed)
 		line=$(grep -E "^option${TAB}${t_name}${TAB}" "$rec" | tail -n1)
 		[ -n "$line" ] || continue
 		v=${line#option"${TAB}${t_name}${TAB}"}
@@ -502,9 +499,9 @@ process_section() {
 			*) die "$name: internal: unknown type '$t_type' for '$t_name'" ;;
 		esac
 	done || {
-		# A per-option coercion failed inside the (sub-shell) pipeline above; its
-		# specific message is already on stderr. Skip THIS instance rather than
-		# aborting every instance, and drop any partial output.
+		# An option failed to convert inside the sub-shell pipeline above; the
+		# specific message is already on stderr. Skip this instance only, and
+		# throw away the partial output.
 		section_skip "$name" "a config value failed validation"
 		rm -f "$out"
 		return 1
@@ -521,13 +518,12 @@ process_section() {
 		esac
 	done
 
-	# ----- Bidirectional coverage assertion -----
-	# expected = present-user-options  UNION  forced-names
-	# emitted  = keys actually written to the file
-	# expected = (present-user-options MINUS intentionally-dropped ones) UNION
-	# forced-names. A dropped option (e.g. an all-invalid reflector list that fell
-	# back to daemon defaults) is deliberately not emitted, so it is excluded here
-	# rather than tripping the assertion.
+	# ----- Coverage check -----
+	# expected = the user options this section sets, minus any we deliberately
+	#            dropped (an all-invalid reflector list falls back to the daemon
+	#            defaults), plus the forced names.
+	# emitted  = the keys actually written to the file.
+	# The two must match exactly, or the instance is skipped.
 	# shellcheck disable=SC2086  # deliberate word-splitting of the name lists
 	present_kept=$(printf '%s\n' $present | sed '/^$/d' | sort -u)
 	if [ -s "$DROPPED" ]; then

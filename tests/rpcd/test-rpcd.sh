@@ -1,29 +1,30 @@
 #!/bin/sh
 #
-# test-rpcd.sh -- verification gate for the rpcd backend (plan 01 / task 8).
-# Runs entirely off-device: no ubus, no rpcd, no jsonfilter, no router.
+# test-rpcd.sh -- tests the rpcd backend off-device: no ubus, no rpcd, no
+# jsonfilter, no router.
 #
 # It sources the rpcd script as a library (CAKE_AUTORATE_RPCD_LIB=1) and drives
-# its internal functions with fixtures, proving the CUSTOM logic the task flags:
+# its functions with fixtures, checking that:
 #
 #   1. the SUMMARY-line parser keys off field 0 == "SUMMARY", uses the 13-field
-#      layout from docs/upstream-option-inventory.md section 3.3 (the SAME field
-#      indices task 6's collectd source consumes), and IGNORES the unprefixed
-#      SUMMARY_HEADER line and every non-SUMMARY TYPE (DATA/LOAD/...);
+#      layout from docs/upstream-option-inventory.md section 3.3 (the same field
+#      positions the collectd reader uses), and ignores the unprefixed
+#      SUMMARY_HEADER line and every other line type (DATA/LOAD/...);
 #   2. per-instance status is keyed by instance, reports parsed fields for an
-#      instance with data, and degrades gracefully for an instance whose log is
-#      empty (no SUMMARY yet) or entirely missing;
-#   3. the SQM interface derivation reads /etc/config/sqm + the live ifb4*
+#      instance with data, and still returns something sensible for one whose
+#      log is empty (no SUMMARY yet) or missing entirely;
+#   3. the SQM interface derivation reads /etc/config/sqm plus the live ifb4*
 #      devices, pairs each egress with its ifb4<iface> ingress, and flags a
 #      mismatch when SQM configured an egress whose ifb device is absent;
-#   4. the input validators reject hostile instance names (path traversal,
-#      command injection) and bad service actions BEFORE any init.d invocation.
+#   4. the validators reject hostile instance names (path traversal, command
+#      injection) and bad service actions before any init.d call.
 #
 # Exit 0 = all checks passed.
 
 # SC2015: the `cond && ok || fail` idiom is safe -- ok() always returns 0.
-# SC2016: single-quoted hostile fixtures are LITERAL on purpose (we assert the
-#         validators reject the raw metacharacters, they must not expand here).
+# SC2016: the single-quoted hostile fixtures are literal on purpose -- we check
+#         the validators reject the raw metacharacters, so they must not expand
+#         here.
 # shellcheck disable=SC2015,SC2016
 set -u
 
@@ -50,7 +51,7 @@ export CAKE_AUTORATE_RPCD_LIB
 # shellcheck source=/dev/null
 . "$RPCD"
 
-# A canonical valid SUMMARY line (inventory 3.3): 13 "; "-separated fields.
+# A valid SUMMARY line (inventory 3.3): 13 "; "-separated fields.
 #  0        1                     2                 3     4    5 6 7    8   9        10      11    12
 # SUMMARY; datetime;             epoch;            dlach ulach ds us dowd uowd     dlcond  ulcond cdl   cul
 SUM_PRIMARY='SUMMARY; 2026-07-23-10:00:00; 1753264800.123456; 42000; 8000; 3; 1; 1200; 800; dl_high; ul_low; 45000; 9000'
@@ -62,7 +63,7 @@ SUM_HEADER='SUMMARY_HEADER; LOG_DATETIME; LOG_TIMESTAMP; DL_ACHIEVED_RATE_KBPS; 
 DATA_LINE='DATA; 2026-07-23-10:00:00; 1753264800.1; 1753264800.1; 42000; 8000; 70; 12; 1753264800; 1.1.1.1; 42; 5000; 5200; 30; 32; 33; 5000; 5100; 20; 22; 23; 3; 1200; 60; 1; 800; 60; dl_high; ul_low; 45000; 9000'
 
 # ==========================================================================
-echo "== 1. SUMMARY parser: field contract (inventory 3.3, shared with task 6)"
+echo "== 1. SUMMARY parser: field layout (inventory 3.3)"
 p=$(parse_summary_line "$SUM_PRIMARY")
 field() { printf '%s\n' "$p" | awk -F'\t' -v k="$1" '$1==k{print $2; exit}'; }
 
@@ -99,7 +100,7 @@ fi
 
 # ==========================================================================
 echo
-echo "== 3. status: per-instance JSON keyed by instance, graceful degradation"
+echo "== 3. status: JSON keyed by instance, sensible output when data is missing"
 logd="$tmp/log"; mkdir -p "$logd"
 # primary: header + an old SUMMARY + the latest SUMMARY (latest must win)
 { printf '%s\n' "$SUM_HEADER"; printf '%s\n' "$SUM_PRIMARY_OLD"; printf '%s\n' "$SUM_PRIMARY"; } > "$logd/cake-autorate.primary.log"
@@ -197,7 +198,7 @@ e2=$(printf '%s' "$ij" | jq -c '.interfaces[] | select(.egress=="eth2")')
 [ "$(printf '%s' "$e2" | jq -r '.mismatch')" = true ] \
 	&& ok "eth2 mismatch == true (enabled SQM egress with no ifb qdisc)" || fail "eth2 mismatch wrong: $e2"
 
-# choices task 9 binds: ul_if <- egress_choices, dl_if <- ingress_choices
+# what the UI binds: ul_if <- egress_choices, dl_if <- ingress_choices
 [ "$(printf '%s' "$ij" | jq -r '.egress_choices | index("eth1") != null and index("eth2") != null')" = true ] \
 	&& ok "egress_choices (ul_if) includes eth1 and eth2" || fail "egress_choices wrong: $(printf '%s' "$ij" | jq -c '.egress_choices')"
 [ "$(printf '%s' "$ij" | jq -r '.ingress_choices | index("ifb4eth1") != null')" = true ] \

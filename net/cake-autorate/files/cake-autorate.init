@@ -1,6 +1,6 @@
 #!/bin/sh /etc/rc.common
 # procd service for cake-autorate -- one supervised daemon per ENABLED UCI
-# instance. Owned by plan 01 / task 5.
+# instance.
 #
 # shellcheck shell=ash
 # `local` is used throughout: it is a valid ash builtin (the interpreter
@@ -14,9 +14,9 @@
 #     1. Run the config bridge with NO ARGUMENTS. The bridge reads live UCI and
 #        writes /etc/cake-autorate/config.<name>.sh for every ENABLED instance
 #        while PRUNING the config of any removed/disabled instance. The init
-#        script deliberately does NOT gate config generation on `enabled` -- the
-#        bridge is the sole arbiter of that. A non-zero bridge exit aborts the
-#        (re)start so a half-written config never reaches the daemon.
+#        script deliberately does not check `enabled` itself -- the bridge alone
+#        decides that. A non-zero bridge exit aborts the (re)start so a
+#        half-written config never reaches the daemon.
 #     2. For each ENABLED UCI section, open one procd instance named after the
 #        section, running one upstream daemon against that section's generated
 #        config file. procd supervises and respawns each independently, so a
@@ -31,7 +31,7 @@
 #   filename (regex config.<id>.sh), so two WANs can never collide and this
 #   script adds no shared pid/run files of its own.
 #
-# INVARIANTS (from the task-2 install layout / upstream prefix search)
+# REQUIREMENTS (from the install layout and upstream's prefix search)
 #   * export CAKE_AUTORATE_CONFIG_PREFIX=/etc/cake-autorate -- /etc/cake-autorate
 #     is NOT in upstream's POSSIBLE_CONFIG_PREFIXES, so without this env var the
 #     daemon's config-prefix probe fails even though we pass the full path.
@@ -48,7 +48,7 @@ STOP=4
 USE_PROCD=1
 
 # Overridable so the off-device test harness can point at fixtures. On a target
-# these resolve to the task-2 install paths.
+# these are the install paths.
 CA_SCRIPT_PREFIX="${CA_SCRIPT_PREFIX:-/usr/lib/cake-autorate}"
 CA_CONFIG_PREFIX="${CA_CONFIG_PREFIX:-/etc/cake-autorate}"
 CA_BRIDGE="${CA_BRIDGE:-/usr/libexec/cake-autorate/cake-autorate-bridge.sh}"
@@ -64,8 +64,8 @@ start_instance() {
 
 	config_file="$CA_CONFIG_PREFIX/config.$section.sh"
 	if [ ! -f "$config_file" ]; then
-		# The bridge is the arbiter of `enabled`; if it produced no config for a
-		# section we consider enabled, honour the bridge and start nothing.
+		# The bridge decides `enabled`; if it produced no config for a section we
+		# think is enabled, take its word for it and start nothing.
 		logger -t cake-autorate -p daemon.warn \
 			"instance '$section' enabled but $config_file not generated; skipping"
 		return 0
@@ -83,11 +83,11 @@ start_instance() {
 start_service() {
 	config_load cake-autorate
 
-	# Whole-world sync + prune of every instance config from live UCI. Abort the
-	# (re)start on failure so instances never launch against a stale/partial
-	# config. Pass CA_CONFIG_PREFIX explicitly so the bridge writes to exactly the
-	# directory start_instance reads config.<name>.sh from -- otherwise a
-	# non-default prefix would desync generation from lookup.
+	# Regenerate and prune every instance config from live UCI. Abort the
+	# (re)start on failure so instances never launch against a stale or partial
+	# config. Pass CA_CONFIG_PREFIX explicitly so the bridge writes to exactly
+	# the directory start_instance reads config.<name>.sh from -- otherwise a
+	# non-default prefix would have it writing one place and us reading another.
 	if ! CAKE_AUTORATE_CONFIG_PREFIX="$CA_CONFIG_PREFIX" "$CA_BRIDGE"; then
 		logger -t cake-autorate -p daemon.err \
 			"config bridge ($CA_BRIDGE) failed; refusing to (re)start instances"

@@ -64,12 +64,11 @@ test.describe('cake-autorate status: live data & controls', () => {
   });
 
   /*
-   * Regression guard for the status-view poll refactor: the poll must UPDATE
-   * the [data-live="1"] cells in place rather than rebuild the instance-card
-   * tree every interval. Both behaviours render identical text, so no text
-   * assertion can tell them apart -- node identity is the only observable
-   * difference. We stamp each live cell with an attribute the view never
-   * writes; a rebuild discards those nodes and the stamps go with them.
+   * The poll must update the [data-live="1"] cells in place rather than
+   * rebuild the instance cards every interval. Both render identical text, so
+   * only node identity tells them apart. We stamp each live cell with an
+   * attribute the view never writes; a rebuild throws those nodes away and the
+   * stamps go with them.
    */
   test('poll updates live cells in place instead of rebuilding the cards', async ({ page, luci }) => {
     await gotoStatus(page, luci);

@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Contract test for the cake-autorate collectd exec reader
+# Tests the cake-autorate collectd exec reader
 # (net/cake-autorate/files/cake-autorate-collectd.sh).
 #
 # The reader parses the daemon's SUMMARY log lines (see
@@ -8,16 +8,16 @@
 # lines, one metric per line, with the collectd plugin instance set to the
 # cake-autorate instance id (parsed from the log filename).
 #
-# This test feeds realistic sample logs -- two live instances plus a rotated
-# instance whose current .log is empty and whose data lives in .log.old -- and
-# asserts the exact per-field, per-instance PUTVAL output, including:
+# It feeds realistic sample logs -- two live instances plus a rotated instance
+# whose current .log is empty and whose data sits in .log.old -- and checks the
+# exact per-field, per-instance PUTVAL output, including:
 #   * the load-condition string -> numeric gauge mapping,
 #   * that the unprefixed SUMMARY_HEADER line is ignored,
 #   * that DATA / DEBUG / other TYPE lines are ignored,
-#   * that only the LAST SUMMARY line of a file is reported (poll semantics),
+#   * that only the last SUMMARY line of a file is reported,
 #   * that a rotated instance falls back to <log>.old.
 #
-# POSIX sh; no bashisms. Exit 0 = all assertions passed.
+# POSIX sh, no bashisms. Exit 0 = every check passed.
 
 set -u
 

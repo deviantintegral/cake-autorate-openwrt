@@ -4,12 +4,12 @@
 /*
  * cake-autorate option metadata + pure helpers.
  *
- * SINGLE SOURCE OF TRUTH for the config form: the view builds one field per
- * entry in OPTIONS by iterating this array, so "rendered field set" == "OPTIONS"
- * by construction. Each entry is exactly one of the 66 upstream cake-autorate
- * 3.2.2 options (docs/upstream-option-inventory.md / docs/uci-option-schema.tsv).
- * The package-local `enabled` procd gate is NOT here -- it is not an upstream
- * option and is added separately by the view.
+ * The single source of truth for the config form: the view builds one field per
+ * entry by iterating OPTIONS, so the rendered fields cannot drift from this
+ * list. Each entry is one of the 66 options upstream cake-autorate 3.2.2
+ * implements (docs/upstream-option-inventory.md / docs/uci-option-schema.tsv).
+ * The package-local `enabled` procd gate is not here -- it is not an upstream
+ * option and the view adds it separately.
  *
  * Keep this file free of LuCI runtime calls (no _(), no L.*) at module scope so
  * the metadata + helpers can be unit-tested under plain node (see
@@ -177,7 +177,7 @@ var OPTIONS = [
 	  desc: 'gzip exported log files and append .gz to the export filename.', units: '0 or 1' }
 ];
 
-/* Expected per-group counts -- the coverage invariant (docs/uci-schema.md 6). */
+/* Expected per-group counts (docs/uci-schema.md section 6). */
 var GROUP_COUNTS = {
 	essentials: 8, shaper: 11, pingers: 5, reflectors: 10,
 	detection: 10, idle: 8, logging: 14
@@ -186,10 +186,10 @@ var GROUP_COUNTS = {
 var TOTAL_OPTIONS = 66;
 
 /*
- * coverageReport(options) -- pure. Proves the rendered option set is exactly the
- * 66 upstream options with the expected per-group split and no duplicates. The
- * view calls this at load time and refuses to render a mismatch, so a "UI option
- * with no daemon backing" defect cannot recur silently.
+ * coverageReport(options) -- pure. Checks the option set is exactly the 66
+ * upstream options, split across groups as expected, with no duplicates. The
+ * view runs this at load time and shows an error on a mismatch, so a UI option
+ * with nothing behind it in the daemon cannot slip through unnoticed.
  */
 function coverageReport(options) {
 	var counts = {}, seen = {}, dupes = [], errors = [];
@@ -222,9 +222,9 @@ function coverageReport(options) {
 }
 
 /*
- * optionMatches(query, name, title) -- pure. The search/filter predicate: an
- * option row is shown when the (case-insensitive, trimmed) query is empty or is
- * a substring of the option's UCI name or its human title.
+ * optionMatches(query, name, title) -- pure. Decides whether the search box
+ * shows a row: true when the trimmed, lower-cased query is empty or appears in
+ * the option's UCI name or its title.
  */
 function optionMatches(query, name, title) {
 	var q = String(query == null ? '' : query).trim().toLowerCase();
@@ -238,10 +238,10 @@ function optionMatches(query, name, title) {
 }
 
 /*
- * RATE_TRIOS -- the two min/base/max shaper-rate groups whose ORDERING the
+ * RATE_TRIOS -- the two min/base/max shaper-rate groups whose ordering the
  * Essentials help text promises ("must be <= base", "between min and max",
- * ">= base"). Per-field datatypes cannot express a cross-field relation, so the
- * view attaches checkRateOrder() to all six fields to actually enforce it.
+ * ">= base"). A LuCI datatype only sees one field, so the view hangs
+ * checkRateOrder() off all six fields to actually enforce it.
  */
 var RATE_TRIOS = [
 	{ dir: 'dl', min: 'min_dl_shaper_rate_kbps', base: 'base_dl_shaper_rate_kbps', max: 'max_dl_shaper_rate_kbps' },
@@ -258,13 +258,13 @@ function rateNum(v) {
 }
 
 /*
- * checkRateOrder(min, base, max) -- pure. Returns null when the trio is
- * consistent, else { code, a, b } naming the violated relation and the two
- * offending values. The view turns `code` into a localized sentence.
+ * checkRateOrder(min, base, max) -- pure. Returns null when the three agree,
+ * else { code, a, b } naming the rule broken and the two offending values. The
+ * view turns `code` into a translated sentence.
  *
- * Any field may be empty (rmempty: the daemon then applies its own default), so
- * a pair is only compared when BOTH of its values parse as numbers -- an
- * unfilled field must never manufacture an error.
+ * Any field may be left empty (rmempty; the daemon then uses its own default),
+ * so a pair is only compared when both values parse as numbers -- a blank field
+ * must never invent an error.
  */
 function checkRateOrder(min, base, max) {
 	var m = rateNum(min), b = rateNum(base), x = rateNum(max);
@@ -279,15 +279,15 @@ function checkRateOrder(min, base, max) {
 }
 
 /*
- * instanceNameSuggestions(egressChoices, existingNames) -- pure. Candidate
- * instance ids for the "Add instance" field, derived from the SQM egress devices
- * (one cake-autorate instance manages one WAN, so the WAN is the natural name).
+ * instanceNameSuggestions(egressChoices, existingNames) -- pure. Suggested ids
+ * for the "Add instance" field, taken from the SQM egress devices: one instance
+ * manages one WAN, so the WAN name is the obvious choice.
  *
- * A UCI section name must match [a-zA-Z0-9_]+, but real WAN devices frequently
- * do not -- `pppoe-wan`, `eth0.2`, `wan.835`. Offering those verbatim would
- * suggest names UCI then rejects, so each is sanitized to a valid identifier and
- * anything already configured is dropped. Returns [] when SQM is absent, which
- * is the signal to offer no suggestions at all rather than a misleading list.
+ * A UCI section name must match [a-zA-Z0-9_]+, but real WAN devices often do
+ * not -- `pppoe-wan`, `eth0.2`, `wan.835`. Offering those as-is would suggest
+ * names UCI then rejects, so each is rewritten into a valid identifier and
+ * anything already configured is dropped. With no SQM config this returns [],
+ * which means "offer nothing" rather than a misleading list.
  */
 function instanceNameSuggestions(egressChoices, existingNames) {
 	var used = {};
@@ -311,9 +311,9 @@ function instanceNameSuggestions(egressChoices, existingNames) {
 
 /*
  * datatypeFor(opt) -- pure. Maps a metadata entry to a LuCI datatype string,
- * composing sign/format (uinteger/ufloat) with any lo/hi bounds. Bounds are a
- * client-side UX aid only; the config bridge (task 4) is the authority on
- * type/range formatting sent to the daemon.
+ * combining the base type (uinteger/ufloat) with any lo/hi bounds. The bounds
+ * are only there to help in the browser; the config bridge has the final say on
+ * the types and ranges the daemon sees.
  */
 function datatypeFor(opt) {
 	if (opt.type !== 'integer' && opt.type !== 'float')

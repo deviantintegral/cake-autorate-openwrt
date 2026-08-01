@@ -11,9 +11,9 @@ PKG_NAME:=cake-autorate
 PKG_VERSION:=3.2.2
 PKG_RELEASE:=1
 
-# Pinned upstream: lynxthecat/cake-autorate tag v3.2.2 (the canonical bash
+# Pinned upstream: lynxthecat/cake-autorate tag v3.2.2 (the original bash
 # implementation, not the "Darkmoon" C rewrite). See
-# docs/upstream-option-inventory.md for the provenance of this hash.
+# docs/upstream-option-inventory.md for where this hash came from.
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/lynxthecat/cake-autorate/tar.gz/refs/tags/v$(PKG_VERSION)?
 # Renovate rewrites PKG_VERSION above (see the custom manager in renovate.json)
@@ -47,8 +47,9 @@ define Package/cake-autorate
   SUBMENU:=Routing and Redirection
   TITLE:=CAKE with adaptive bandwidth for bufferbloat control
   URL:=https://github.com/lynxthecat/cake-autorate
-  # collectd-mod-exec: task 6 feeds luci-app-statistics via a collectd `exec`
-  # reader (the tail plugin cannot map the string load-condition to a number).
+  # collectd-mod-exec: statistics reach luci-app-statistics through a collectd
+  # `exec` reader (the tail plugin cannot map the load-condition string to a
+  # number).
   DEPENDS:=+bash +fping +tc-tiny +kmod-sched-cake +sqm-scripts +collectd-mod-exec
   PKGARCH:=$(PKG_ARCH)
 endef
@@ -97,33 +98,33 @@ define Package/cake-autorate/install
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/defaults.sh $(1)$(CA_SCRIPT_PREFIX)/
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/lib.sh $(1)$(CA_SCRIPT_PREFIX)/
 
-	# --- generated per-instance config lives here (task 4 bridge writes it)
+	# --- where the bridge writes the generated per-instance config ------
 	$(INSTALL_DIR) $(1)$(CA_CONFIG_PREFIX)
 
-	# --- UCI configuration (task 3 owns the body; conffile above) -------
+	# --- UCI configuration (a conffile, see above) ----------------------
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/cake-autorate.config $(1)/etc/config/cake-autorate
 
-	# --- procd init script (task 5 owns the body) -----------------------
+	# --- procd init script ----------------------------------------------
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/cake-autorate.init $(1)/etc/init.d/cake-autorate
 
-	# --- UCI -> native config bridge (task 4 owns the body) -------------
+	# --- UCI -> native config bridge ------------------------------------
 	$(INSTALL_DIR) $(1)/usr/libexec/cake-autorate
 	$(INSTALL_BIN) ./files/cake-autorate-bridge.sh \
 		$(1)/usr/libexec/cake-autorate/cake-autorate-bridge.sh
 
-	# --- collectd exec statistics source (task 6 owns the body) ---------
+	# --- collectd exec statistics source --------------------------------
 	$(INSTALL_DIR) $(1)/etc/collectd/conf.d
 	$(INSTALL_CONF) ./files/cake-autorate.collectd.conf \
 		$(1)/etc/collectd/conf.d/cake-autorate.conf
-	# task 6: the exec reader parsed by the collectd config above.
+	# the exec reader the collectd config above runs.
 	$(INSTALL_DIR) $(1)/usr/libexec/collectd
 	$(INSTALL_BIN) ./files/cake-autorate-collectd.sh \
 		$(1)/usr/libexec/collectd/cake-autorate-collectd.sh
 
-	# task 008: rpcd backend (SQM interface derivation, log-stream status,
-	# service controls) -- object name "cake-autorate", gated by the LuCI ACL.
+	# --- rpcd backend: SQM interface derivation, log-stream status and
+	# service controls. ubus object "cake-autorate", gated by the LuCI ACL.
 	$(INSTALL_DIR) $(1)/usr/libexec/rpcd
 	$(INSTALL_BIN) ./files/cake-autorate.rpcd $(1)/usr/libexec/rpcd/cake-autorate
 endef
