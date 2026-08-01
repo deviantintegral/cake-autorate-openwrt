@@ -134,6 +134,16 @@ The build recipe lives in the reusable `.github/workflows/build.yml`; `ci.yml`
 and `release.yml` (on a `v*` tag) both call it. **Do not fork that recipe into a
 second workflow** — a release has to ship what CI tested.
 
+**Do not bump the OpenWrt or upstream cake-autorate version by hand.** Neither
+lives in one place — the OpenWrt release is restated across both workflows, the
+integration harness and six docs, and `renovate.json` carries a custom manager
+that rewrites every one of them as a single dependency. Editing one site by hand
+desynchronises the rest. The two companion hashes (`PKG_HASH`, `IMG_SHA256`)
+cannot be computed by Renovate, so those bumps land as PRs that deliberately
+fail until a human refreshes the hash; the PR body carries the checklist. If you
+add a new place that names either version, add a matching pattern to
+`renovate.json` — and keep it non-overlapping with the existing ones.
+
 **Never hardcode an apk filename.** `cake-autorate-<PKG_VERSION>-r<PKG_RELEASE>.apk`
 moves whenever either field does, so the test harness and the release job locate
 the packages by glob (`cake-autorate-*.apk`, `luci-app-cake-autorate-*.apk` —
