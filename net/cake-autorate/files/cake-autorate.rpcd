@@ -22,6 +22,13 @@
 #                             /var/log/cake-autorate.<instance>.log. Uses the
 #                             same 13-field SUMMARY layout as the collectd exec
 #                             reader (docs/upstream-option-inventory.md 3.3).
+#                             With no SUMMARY line it separates "the daemon is
+#                             warming up" (reason no-data) from "the daemon is
+#                             parked because its configured interface does not
+#                             exist" (reason no-interface). The second is the
+#                             common first-run state on a box where SQM was never
+#                             set up: upstream's verify_ifs_up() blocks in it
+#                             forever, silently, before the main loop starts.
 #   service {action,instance?} start|stop|restart|reload the service via
 #                             /etc/init.d/cake-autorate.
 #
@@ -43,6 +50,8 @@
 #     CAKE_AUTORATE_NET_DIR    (default /sys/class/net)
 #     CAKE_AUTORATE_INSTANCES  (default: enabled UCI sections via libuci)
 #     CAKE_AUTORATE_INIT       (default /etc/init.d/cake-autorate)
+#     CAKE_AUTORATE_SQM_INIT   (default /etc/init.d/sqm)
+#     CAKE_AUTORATE_TC         (default tc)
 
 set -u
 
@@ -178,6 +187,38 @@ _emit_enabled_instance() {
 	[ "$en" = 1 ] && printf '%s\n' "$sid"
 }
 
+# Last-modified time of a file as a unix epoch, or nothing.
+#
+# `date -r` first, `stat -c %Y` only as a fallback: OpenWrt's busybox is commonly
+# built WITHOUT the stat applet, so `stat` is not a safe assumption on a target
+# even though it is always there in a build container. (This is why the uptime
+# read as "unknown" on a perfectly healthy instance before.)
+file_mtime() {
+	date -r "$1" +%s 2>/dev/null || stat -c %Y "$1" 2>/dev/null
+}
+
+# Read one scalar assignment out of a generated config: `key=value` or
+# `key="value"`. The bridge emits strings double-quoted (coerce_string), scalars
+# bare. Last assignment wins, matching how bash would source the file.
+config_value() {
+	[ -r "$1" ] || return 0
+	awk -v k="$2" -F= '
+		$1 == k {
+			v = substr($0, length(k) + 2)
+			sub(/^"/, "", v); sub(/"$/, "", v)
+			last = v
+		}
+		END { if (last != "") print last }
+	' "$1" 2>/dev/null
+}
+
+# Is this a network device on this system? /sys/class/net/<dev> is a symlink to a
+# directory, so -d follows it. An empty name is never present.
+netdev_present() {
+	[ -n "$1" ] || return 1
+	[ -d "${CAKE_AUTORATE_NET_DIR:-/sys/class/net}/$1" ]
+}
+
 # JSON object for one instance's status (braces included). Never fails: a
 # missing or empty log returns {"available":false,"reason":...}.
 status_instance_json() {
@@ -187,10 +228,10 @@ status_instance_json() {
 	local cfgdir="${CAKE_AUTORATE_CONFIG_PREFIX:-/etc/cake-autorate}"
 	local log="$logdir/cake-autorate.$inst.log"
 	local cfg="$cfgdir/config.$inst.sh"
-	local line parsed run_json body
+	local line parsed meta_json body dlif ulif missing
 
 	# Best-effort run state (device-only; the run dir exists only while running).
-	run_json='"running":false'
+	meta_json='"running":false'
 	if [ -d "$rundir/$inst" ]; then
 		# Uptime is measured from the generated config's mtime. The bridge writes
 		# that once per start/reload and never touches it again, so it means
@@ -198,34 +239,66 @@ status_instance_json() {
 		# it moves whenever the daemon adds or removes a state file under it, so
 		# the uptime jumped around on every poll.
 		local mt now up
-		mt=$(stat -c %Y "$cfg" 2>/dev/null || echo '')
+		mt=$(file_mtime "$cfg")
 		now=$(date +%s 2>/dev/null || echo '')
 		if [ -n "$mt" ] && [ -n "$now" ] && [ "$now" -ge "$mt" ]; then
 			up=$((now - mt))
-			run_json="\"running\":true,\"uptime_s\":$up"
+			meta_json="\"running\":true,\"uptime_s\":$up"
 		else
-			run_json='"running":true'
+			meta_json='"running":true'
 		fi
 	fi
 
+	# The interfaces the daemon was actually handed (not what UCI says now -- the
+	# two differ until the next apply). Reported unconditionally so the UI can
+	# name them in a diagnostic without a second round trip.
+	dlif=$(config_value "$cfg" dl_if)
+	ulif=$(config_value "$cfg" ul_if)
+	if [ -n "$dlif" ] || [ -n "$ulif" ]; then
+		meta_json="$meta_json,$(printf 'dl_if\t%s\nul_if\t%s\n' "$dlif" "$ulif" | json_fields_body)"
+	fi
+
 	if [ ! -f "$log" ]; then
-		printf '{"available":false,"reason":"no-log",%s}' "$run_json"
+		printf '{"available":false,"reason":"no-log",%s}' "$meta_json"
 		return 0
 	fi
 	# Never source the log; tail a fixed window and keep the newest real SUMMARY
 	# line. The header line cannot match "^SUMMARY; " because it starts with
 	# "SUMMARY_HEADER;".
+	#
+	# The <log>.old fallback matters more than it looks: upstream rotates on a
+	# wall-clock timer that fires even when nothing is being logged, and rotates
+	# again at every daemon start, so a live-but-quiet instance can have all its
+	# SUMMARY history in .old. The collectd exec reader already falls back to it;
+	# without the same fallback here the status view and the graphs disagree.
 	line=$(tail -n 200 "$log" 2>/dev/null | grep '^SUMMARY; ' | tail -n1)
+	if [ -z "$line" ] && [ -f "$log.old" ]; then
+		line=$(tail -n 200 "$log.old" 2>/dev/null | grep '^SUMMARY; ' | tail -n1)
+	fi
 	if [ -z "$line" ]; then
-		printf '{"available":false,"reason":"no-data",%s}' "$run_json"
+		# No SUMMARY has ever been written. Before calling this "warming up",
+		# check the one condition that makes it permanent: upstream's
+		# verify_ifs_up() blocks forever, before the main loop and before any
+		# SUMMARY, when a configured interface has no /sys/class/net entry. That
+		# is the normal state on a box where SQM was never set up, and it is
+		# indistinguishable from "starting" unless we say so here.
+		missing=''
+		[ -n "$dlif" ] && ! netdev_present "$dlif" && missing="$dlif"
+		[ -n "$ulif" ] && ! netdev_present "$ulif" && missing="${missing:+$missing }$ulif"
+		if [ -n "$missing" ]; then
+			printf '{"available":false,"reason":"no-interface",%s,%s}' \
+				"$meta_json" "$(printf 'missing_ifs\t%s\n' "$missing" | json_fields_body)"
+			return 0
+		fi
+		printf '{"available":false,"reason":"no-data",%s}' "$meta_json"
 		return 0
 	fi
 	parsed=$(parse_summary_line "$line") || {
-		printf '{"available":false,"reason":"no-data",%s}' "$run_json"
+		printf '{"available":false,"reason":"no-data",%s}' "$meta_json"
 		return 0
 	}
 	body=$(printf '%s\n' "$parsed" | json_fields_body)
-	printf '{"available":true,%s,%s}' "$run_json" "$body"
+	printf '{"available":true,%s,%s}' "$meta_json" "$body"
 }
 
 do_status() {
@@ -279,10 +352,37 @@ parse_sqm_sections() {
 	' "$f"
 }
 
+# Does this device carry a CAKE qdisc right now? This is the only check that
+# proves SQM actually ran: /etc/config/sqm can name an interface, and the ifb can
+# exist, while the queue is configured with a different qdisc (fq_codel) or the
+# sqm service is disabled -- in both cases cake-autorate has nothing to adjust,
+# because it only moves the bandwidth of a CAKE qdisc someone else attached.
+has_cake_qdisc() {
+	local dev="$1"
+	[ -n "$dev" ] || return 1
+	tc_available || return 1
+	"${CAKE_AUTORATE_TC:-tc}" qdisc show dev "$dev" 2>/dev/null | grep -q '^qdisc cake '
+}
+
+# Can we run the qdisc probe at all? Reported to the caller so "no CAKE qdisc
+# found" is never confused with "could not look". tc-tiny is a package
+# dependency, so a false here means something is wrong with the install (or with
+# rpcd's PATH) -- and the UI must NOT respond by telling the user their perfectly
+# good SQM setup is broken.
+tc_available() { command -v "${CAKE_AUTORATE_TC:-tc}" >/dev/null 2>&1; }
+
+# Is the sqm-scripts service enabled at boot? A disabled service is the most
+# common reason a correct /etc/config/sqm produces no qdisc at all.
+sqm_service_enabled() {
+	local init="${CAKE_AUTORATE_SQM_INIT:-/etc/init.d/sqm}"
+	[ -x "$init" ] || return 1
+	"$init" enabled >/dev/null 2>&1
+}
+
 do_sqm_interfaces() {
 	local sqm="${CAKE_AUTORATE_SQM_CONFIG:-/etc/config/sqm}"
 	local ifbs sections line iface en ifb present mismatch
-	local objs='' sep='' egress_list=''
+	local objs='' sep='' egress_list='' cake_list='' e_cake i_cake
 
 	ifbs=$(list_ifb_devices)
 	sections=$(parse_sqm_sections "$sqm")
@@ -302,7 +402,11 @@ do_sqm_interfaces() {
 		if printf '%s\n' "$ifbs" | grep -qx "$ifb"; then present=1; else present=0; fi
 		# mismatch: SQM says shape this egress but its ifb ingress isn't live.
 		if [ "$(json_bool "$en")" = true ] && [ "$present" = 0 ]; then mismatch=1; else mismatch=0; fi
-		objs="$objs$sep{\"egress\":\"$iface\",\"ingress_ifb\":\"$ifb\",\"sqm_enabled\":$(json_bool "$en"),\"ifb_present\":$(json_bool "$present"),\"mismatch\":$(json_bool "$mismatch")}"
+		if has_cake_qdisc "$iface"; then e_cake=1; cake_list="$cake_list$iface
+"; else e_cake=0; fi
+		if has_cake_qdisc "$ifb"; then i_cake=1; cake_list="$cake_list$ifb
+"; else i_cake=0; fi
+		objs="$objs$sep{\"egress\":\"$iface\",\"ingress_ifb\":\"$ifb\",\"sqm_enabled\":$(json_bool "$en"),\"ifb_present\":$(json_bool "$present"),\"mismatch\":$(json_bool "$mismatch"),\"egress_cake\":$(json_bool "$e_cake"),\"ingress_cake\":$(json_bool "$i_cake")}"
 		sep=','
 		egress_list="$egress_list$iface
 "
@@ -312,12 +416,15 @@ do_sqm_interfaces() {
 	local present_flag='false'
 	[ -n "$sections" ] && present_flag='true'
 
-	printf '{"sqm_config_present":%s,"interfaces":[%s],"egress_choices":%s,"ingress_choices":%s,"ifb_devices":%s}\n' \
+	printf '{"sqm_config_present":%s,"sqm_service_enabled":%s,"tc_available":%s,"interfaces":[%s],"egress_choices":%s,"ingress_choices":%s,"ifb_devices":%s,"cake_devices":%s}\n' \
 		"$present_flag" \
+		"$(sqm_service_enabled && printf 'true' || printf 'false')" \
+		"$(tc_available && printf 'true' || printf 'false')" \
 		"$objs" \
 		"$(printf '%s' "$egress_list" | json_str_array)" \
 		"$(printf '%s\n' "$ifbs" | json_str_array)" \
-		"$(printf '%s\n' "$ifbs" | json_str_array)"
+		"$(printf '%s\n' "$ifbs" | json_str_array)" \
+		"$(printf '%s' "$cake_list" | json_str_array)"
 }
 
 # --------------------------------------------------------------------------

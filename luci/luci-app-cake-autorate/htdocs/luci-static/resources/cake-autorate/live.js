@@ -16,10 +16,13 @@
  *       dl_achieved_kbps, ul_achieved_kbps, dl_sum_delays, ul_sum_delays,
  *       dl_avg_owd_delta_us, ul_avg_owd_delta_us, dl_load_condition,
  *       ul_load_condition, cake_dl_rate_kbps, cake_ul_rate_kbps, datetime,
- *       epoch }, ... }   (available:false carries reason: no-log | no-data)
- *   sqm_interfaces {}  -> { sqm_config_present, interfaces:[{egress, ingress_ifb,
- *       sqm_enabled, ifb_present, mismatch}], egress_choices, ingress_choices,
- *       ifb_devices }.  dl_if <- ingress (ifb) choices; ul_if <- egress choices.
+ *       epoch, dl_if, ul_if }, ... }   (available:false carries reason:
+ *       no-log | no-data | no-interface; no-interface also carries missing_ifs)
+ *   sqm_interfaces {}  -> { sqm_config_present, sqm_service_enabled,
+ *       interfaces:[{egress, ingress_ifb, sqm_enabled, ifb_present, mismatch,
+ *       egress_cake, ingress_cake}], egress_choices, ingress_choices,
+ *       ifb_devices, cake_devices }.
+ *       dl_if <- ingress (ifb) choices; ul_if <- egress choices.
  */
 
 /* Numeric summary fields, normalized to a JS number or null. */
@@ -31,8 +34,17 @@ var NUM_FIELDS = [
 	'cake_dl_rate_kbps', 'cake_ul_rate_kbps'
 ];
 
-/* String summary fields, normalized to a non-empty string or null. */
-var STR_FIELDS = ['dl_load_condition', 'ul_load_condition', 'datetime', 'reason'];
+/*
+ * String summary fields, normalized to a non-empty string or null.
+ *
+ * dl_if / ul_if / missing_ifs are carried on the row in BOTH the available and
+ * unavailable cases: they are what the view names when it has to explain why an
+ * instance that looks "running" is producing nothing.
+ */
+var STR_FIELDS = [
+	'dl_load_condition', 'ul_load_condition', 'datetime', 'reason',
+	'dl_if', 'ul_if', 'missing_ifs'
+];
 
 /*
  * STATUS_FIELDS -- the DL/UL metric rows the status table renders, in order.
@@ -190,11 +202,95 @@ function interfaceStatus(value, sqm, direction) {
 	return { level: 'ok', message: 'Backed by the live SQM ingress IFB device "' + value + '".' };
 }
 
+/*
+ * setupState(sqm) -- the "what do I do next" checklist, derived from one
+ * sqm_interfaces response.
+ *
+ * cake-autorate does not create a qdisc; it only moves the bandwidth of a CAKE
+ * qdisc sqm-scripts already attached. Every precondition below is therefore
+ * SOMEONE ELSE's setup, and the failure mode when one is unmet is silent: the
+ * daemon starts, blocks in upstream's verify_ifs_up() waiting for an interface
+ * that will never exist, and reports nothing. This turns that into a visible,
+ * ordered list of the remaining steps.
+ *
+ * Returns { ok, level, title, steps: [{done, text}], link }, where level is
+ * 'ok' | 'warn' | 'error' and every step is phrased as an action.
+ */
+var SQM_PAGE = 'admin/network/sqm';
+
+function setupState(sqm) {
+	sqm = (sqm && typeof sqm === 'object') ? sqm : {};
+
+	var configured = sqm.sqm_config_present === true;
+	var enabled = sqm.sqm_service_enabled === true;
+	var ifaces = Array.isArray(sqm.interfaces) ? sqm.interfaces : [];
+	var cake = Array.isArray(sqm.cake_devices) ? sqm.cake_devices : [];
+	var queues = ifaces.filter(function (o) { return o && o.sqm_enabled === true; });
+	/* tc_available:false means the qdisc probe could not run (tc missing from
+	 * rpcd's PATH), NOT that there is no CAKE qdisc. Treating the two the same
+	 * would tell a user with a working SQM setup that it is broken, so when we
+	 * cannot look we fall back to the device-existence evidence instead. */
+	var probed = sqm.tc_available !== false;
+	var shaped = probed
+		? cake.length > 0
+		: queues.some(function (o) { return o.ifb_present === true; });
+
+	var steps = [
+		{ done: configured,
+		  text: 'Configure SQM on your WAN interface (Network -> SQM QoS), with the queue discipline set to "cake".' },
+		{ done: configured && queues.length > 0,
+		  text: 'Enable that SQM queue.' },
+		{ done: enabled,
+		  text: 'Enable the SQM service so it starts at boot, then start it.' },
+		{ done: shaped,
+		  text: 'Confirm a CAKE qdisc is attached (tc qdisc show | grep cake) -- this creates the ifb4* ingress device.' },
+		{ done: shaped,
+		  text: 'Set this instance\'s download interface to the ifb4* device and its upload interface to the SQM egress device, then start CAKE Autorate.' }
+	];
+
+	if (!configured)
+		return {
+			ok: false, level: 'error', link: SQM_PAGE, steps: steps,
+			title: 'SQM is not set up on this router, so there is no CAKE qdisc for CAKE Autorate to adjust.'
+		};
+
+	if (queues.length === 0)
+		return {
+			ok: false, level: 'error', link: SQM_PAGE, steps: steps,
+			title: 'SQM is configured but every queue is disabled, so no CAKE qdisc is attached.'
+		};
+
+	if (!shaped)
+		return {
+			ok: false, level: 'error', link: SQM_PAGE, steps: steps,
+			title: enabled
+				? 'SQM is configured and enabled but no CAKE qdisc is attached yet. Check that the queue discipline is "cake" (not fq_codel) and that the SQM service started.'
+				: 'SQM is configured but the SQM service is not enabled, so no CAKE qdisc is attached.'
+		};
+
+	var broken = queues.filter(function (o) { return o.mismatch === true; });
+	if (broken.length)
+		return {
+			ok: false, level: 'warn', link: SQM_PAGE, steps: steps,
+			title: 'SQM is enabled on ' + broken.map(function (o) { return o.egress; }).join(', ') +
+				' but the matching ingress IFB device has not been created, so download shaping cannot work yet.'
+		};
+
+	return {
+		ok: true, level: 'ok', link: SQM_PAGE, steps: steps,
+		title: probed
+			? 'SQM is shaping with CAKE on: ' + cake.join(', ') + '.'
+			: 'SQM is configured and its ingress devices are live. (The CAKE qdisc itself could not be verified — tc is not available to rpcd.)'
+	};
+}
+
 return baseclass.extend({
 	STATUS_FIELDS: STATUS_FIELDS,
+	SQM_PAGE: SQM_PAGE,
 	formatUptime: formatUptime,
 	statusRow: statusRow,
 	statusRows: statusRows,
 	interfaceChoices: interfaceChoices,
-	interfaceStatus: interfaceStatus
+	interfaceStatus: interfaceStatus,
+	setupState: setupState
 });

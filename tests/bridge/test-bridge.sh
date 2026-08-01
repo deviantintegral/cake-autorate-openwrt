@@ -367,6 +367,69 @@ else
 	fail "unmutated bridge unexpectedly failed"; sed 's/^/     /' "$tmp/e11c"
 fi
 
+# ----------------------------------------------------------------- check 12
+echo
+echo "== 12. startup preflight: warn about configs the daemon cannot run on"
+# Both conditions below are invisible at runtime: upstream either parks forever
+# (missing interface) or exits before it opens its log file (idle threshold above
+# a min shaper rate). In both cases the LuCI log stream stays empty and only
+# syslog has the reason -- so the bridge says it at generation time, on stderr
+# and via logger. Both are WARNINGS, never skips: the config must still be
+# written, because an interface can legitimately appear later at boot.
+cat > "$tmp/preflight.uci" <<'EOF'
+config cake-autorate 'pre'
+	option enabled '1'
+	option dl_if 'ifb4nosuchdev'
+	option ul_if 'nosuchdev'
+	option min_dl_shaper_rate_kbps '5000'
+	option base_dl_shaper_rate_kbps '20000'
+	option max_dl_shaper_rate_kbps '80000'
+	option min_ul_shaper_rate_kbps '1000'
+	option base_ul_shaper_rate_kbps '4000'
+	option max_ul_shaper_rate_kbps '8000'
+	option connection_active_thr_kbps '2000'
+EOF
+emptynet="$tmp/emptynet"; mkdir -p "$emptynet"
+_pf=$(CAKE_AUTORATE_NET_DIR="$emptynet" \
+	run_bridge --uci-file "$tmp/preflight.uci" --instance pre --stdout 2>"$tmp/e12")
+_pfrc=$?
+
+[ "$_pfrc" -eq 0 ] && ok "preflight warnings do not fail the run" \
+	|| { fail "preflight aborted the run (rc=$_pfrc)"; sed 's/^/     /' "$tmp/e12"; }
+printf '%s\n' "$_pf" | grep -q '^dl_if="ifb4nosuchdev"$' \
+	&& ok "the config is still WRITTEN with a missing interface (upstream may wait for it)" \
+	|| fail "config not generated for an absent interface"
+grep -q "dl_if 'ifb4nosuchdev' is not a network device" "$tmp/e12" \
+	&& ok "warns that dl_if is not a device on this system" \
+	|| { fail "no dl_if preflight warning"; sed 's/^/     /' "$tmp/e12"; }
+grep -q "ul_if 'nosuchdev' is not a network device" "$tmp/e12" \
+	&& ok "warns that ul_if is not a device on this system" || fail "no ul_if preflight warning"
+grep -q 'REFUSES TO START' "$tmp/e12" \
+	&& ok "warns that connection_active_thr_kbps (2000) > min_ul_shaper_rate_kbps (1000)" \
+	|| { fail "no idle-threshold preflight warning"; sed 's/^/     /' "$tmp/e12"; }
+
+# The same config on a system where the devices DO exist, and with the threshold
+# under both minimums, must be silent -- a warning that always fires is noise.
+cat > "$tmp/preflight-ok.uci" <<'EOF'
+config cake-autorate 'pre'
+	option enabled '1'
+	option dl_if 'ifb4nosuchdev'
+	option ul_if 'nosuchdev'
+	option min_dl_shaper_rate_kbps '5000'
+	option base_dl_shaper_rate_kbps '20000'
+	option max_dl_shaper_rate_kbps '80000'
+	option min_ul_shaper_rate_kbps '5000'
+	option base_ul_shaper_rate_kbps '8000'
+	option max_ul_shaper_rate_kbps '9000'
+	option connection_active_thr_kbps '2000'
+EOF
+fullnet="$tmp/fullnet"; mkdir -p "$fullnet/ifb4nosuchdev" "$fullnet/nosuchdev"
+CAKE_AUTORATE_NET_DIR="$fullnet" \
+	run_bridge --uci-file "$tmp/preflight-ok.uci" --instance pre --stdout >/dev/null 2>"$tmp/e12b"
+grep -q 'is not a network device\|REFUSES TO START' "$tmp/e12b" \
+	&& { fail "preflight warned on a valid config:"; sed 's/^/     /' "$tmp/e12b"; } \
+	|| ok "no preflight warning when the devices exist and the thresholds are sane"
+
 # ------------------------------------------------------------------ summary
 echo
 if [ "$fails" -eq 0 ]; then

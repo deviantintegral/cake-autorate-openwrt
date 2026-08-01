@@ -13,8 +13,18 @@ Both are wired into `.github/workflows/ci.yml`.
 
 There are also fast off-device unit tests under `tests/bridge`, `tests/schema`,
 `tests/rpcd`, `tests/service`, `tests/statistics` and `tests/regression` (plain
-shell, no VM) that CI and contributors can run directly; the sections below cover
-the two VM-backed suites.
+shell, no VM), plus two node suites over the LuCI resources
+(`luci/luci-app-cake-autorate/tests/`). These run in the `unit` CI job — no SDK,
+no VM, no KVM, a few seconds — alongside ShellCheck over the shipped shell
+payload. Run the whole set locally with:
+
+```sh
+for t in tests/*/test-*.sh; do sh "$t" || break; done
+node luci/luci-app-cake-autorate/tests/live.test.js
+node luci/luci-app-cake-autorate/tests/options-coverage.test.js
+```
+
+The sections below cover the two VM-backed suites.
 
 ## Building the apks first
 

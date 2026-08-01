@@ -93,6 +93,39 @@ script, set a sane starting bandwidth), and cake-autorate takes it from there.
 See [`docs/configuration.md`](docs/configuration.md) for the interface/rate
 setup.
 
+### Set SQM up FIRST — the failure mode is silent
+
+This ordering is not advisory. Until SQM has attached a CAKE qdisc there is no
+`ifb4*` ingress device, so `dl_if`/`ul_if` name interfaces that do not exist —
+and upstream's `verify_ifs_up()` then **blocks forever**, before the main loop
+and before it writes a single `SUMMARY` line. The daemon is alive, `running`
+shows green, and nothing is ever measured or shaped. Upstream logs that wait at
+`DEBUG` level only, which this package turns off by default.
+
+Both LuCI tabs now lead with a checklist when a precondition is unmet, the rpcd
+`status` method reports `reason: no-interface` (naming the missing device), and
+the config bridge writes a warning to `logread` at every apply. To check by hand:
+
+```sh
+tc qdisc show | grep cake        # nothing here means SQM is not shaping
+logread -e cake-autorate
+```
+
+### Recommended companion package: `collectd-mod-sqm`
+
+Install **`collectd-mod-sqm`** alongside this feed if you graph anything:
+
+```sh
+apk add collectd-mod-sqm
+```
+
+It is deliberately **not** a dependency — it collects SQM's *own* qdisc counters
+(drops, backlog, per-tin behaviour) straight from netlink, which is a different
+signal from this package's `SUMMARY`-derived rate/delay graphs. The two are
+complementary and answer different questions: ours shows *what bandwidth the
+controller chose and why*, `collectd-mod-sqm` shows *what the qdisc then did with
+it*. Diagnosing bufferbloat is much easier with both on the same time axis.
+
 ## Building with the OpenWrt 25.12.5 SDK
 
 Everything is pinned to **OpenWrt 25.12.5**. Build the two noarch packages with
@@ -162,7 +195,15 @@ repository key; verify them against the release's `SHA256SUMS` first. There is
 work — that needs a signed package index, which this feed does not publish.
 
 `apk` pulls the runtime dependencies automatically: `bash`, `fping`, `tc-tiny`,
-`kmod-sched-cake`, **`sqm-scripts`** and `collectd-mod-exec`.
+`kmod-sched-cake`, **`sqm-scripts`** and `collectd-mod-exec`; the LuCI package
+additionally pulls `luci-app-statistics` (the graphs) and `luci-app-sqm` (the
+page our setup guidance sends you to). Consider adding
+[`collectd-mod-sqm`](#recommended-companion-package-collectd-mod-sqm) too.
+
+**Configure SQM before starting cake-autorate** — see [Set SQM up
+FIRST](#set-sqm-up-first--the-failure-mode-is-silent). With no CAKE qdisc the
+daemon starts, waits forever for an interface that does not exist, and reports
+nothing.
 
 After installing, configure at least one instance's interfaces and rates
 (LuCI → **Network → Cake Autorate**, or edit `/etc/config/cake-autorate`), set

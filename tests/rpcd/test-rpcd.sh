@@ -155,6 +155,93 @@ one=$(do_status primary)
 
 # ==========================================================================
 echo
+echo "== 3b. status: uptime without the stat applet, .old fallback, parked daemon"
+
+# --- file_mtime must not depend on `stat` ---------------------------------
+# OpenWrt's busybox is commonly built WITHOUT the stat applet, so a status path
+# that shells out to `stat -c %Y` reports "uptime unknown" on a perfectly healthy
+# instance. Shadow stat with a stub that always fails and prove the mtime still
+# resolves (via `date -r`).
+stubs="$tmp/stubs"; mkdir -p "$stubs"
+printf '#!/bin/sh\nexit 127\n' > "$stubs/stat"; chmod +x "$stubs/stat"
+mtf="$tmp/mtime-probe"; : > "$mtf"
+want_mt=$(date -r "$mtf" +%s 2>/dev/null || echo '')
+got_mt=$(PATH="$stubs:$PATH" file_mtime "$mtf")
+[ -n "$got_mt" ] && [ "$got_mt" = "$want_mt" ] \
+	&& ok "file_mtime resolves with no working stat applet ($got_mt)" \
+	|| fail "file_mtime failed without stat: got [$got_mt] want [$want_mt]"
+
+# --- uptime is reported when the run dir and generated config exist --------
+cfgd="$tmp/cfg"; mkdir -p "$cfgd"
+cat > "$cfgd/config.upt.sh" <<'EOF'
+dl_if="ifb4eth1"
+ul_if="eth1"
+EOF
+rund="$tmp/run"; mkdir -p "$rund/upt"
+netd_ok="$tmp/net-ok"; mkdir -p "$netd_ok/ifb4eth1" "$netd_ok/eth1"
+{ printf '%s\n' "$SUM_HEADER"; printf '%s\n' "$SUM_PRIMARY"; } > "$logd/cake-autorate.upt.log"
+
+uj=$(CAKE_AUTORATE_RUN_DIR="$rund" CAKE_AUTORATE_CONFIG_PREFIX="$cfgd" \
+	CAKE_AUTORATE_NET_DIR="$netd_ok" PATH="$stubs:$PATH" status_instance_json upt)
+[ "$(printf '%s' "$uj" | jq -r '.running')" = true ] \
+	&& ok "running == true when the run dir exists" || fail "running wrong: $uj"
+[ "$(printf '%s' "$uj" | jq -r '.uptime_s | type')" = number ] \
+	&& ok "uptime_s is a number even with stat unavailable" \
+	|| fail "uptime_s missing/not a number (the busybox-stat regression): $uj"
+[ "$(printf '%s' "$uj" | jq -r '.dl_if')" = ifb4eth1 ] \
+	&& ok "status reports the dl_if the daemon was handed" || fail "dl_if wrong: $uj"
+
+# --- the rotated .old log is a valid SUMMARY source ------------------------
+# Upstream rotates on a wall-clock timer that fires even when nothing is being
+# logged, and again at every daemon start, so a live-but-quiet instance can have
+# all its SUMMARY history in .old. The collectd source already falls back to it.
+printf '%s\n' "$SUM_HEADER" > "$logd/cake-autorate.rot.log"
+{ printf '%s\n' "$SUM_HEADER"; printf '%s\n' "$SUM_PRIMARY"; } > "$logd/cake-autorate.rot.log.old"
+rj=$(CAKE_AUTORATE_NET_DIR="$netd_ok" status_instance_json rot)
+[ "$(printf '%s' "$rj" | jq -r '.available')" = true ] \
+	&& ok "SUMMARY read from the rotated <log>.old when the live log has none" \
+	|| fail "no .old fallback: $rj"
+[ "$(printf '%s' "$rj" | jq -r '.cake_dl_rate_kbps')" = 45000 ] \
+	&& ok "rotated fallback parses the same 13-field contract" || fail ".old parse wrong: $rj"
+
+# --- the parked-daemon case: reason no-interface, not "warming up" ---------
+# upstream's verify_ifs_up() blocks before the main loop and before any SUMMARY
+# when a configured interface has no /sys/class/net entry. Reporting that as
+# no-data ("waiting for the first sample") is wrong: it never resolves.
+cat > "$cfgd/config.parked.sh" <<'EOF'
+dl_if="ifb-wan"
+ul_if="wan"
+EOF
+mkdir -p "$rund/parked"
+printf '%s\n' "$SUM_HEADER" > "$logd/cake-autorate.parked.log"
+pj=$(CAKE_AUTORATE_RUN_DIR="$rund" CAKE_AUTORATE_CONFIG_PREFIX="$cfgd" \
+	CAKE_AUTORATE_NET_DIR="$netd_ok" status_instance_json parked)
+[ "$(printf '%s' "$pj" | jq -r '.reason')" = no-interface ] \
+	&& ok "missing dl_if/ul_if -> reason no-interface (not no-data)" \
+	|| fail "parked instance misreported: $pj"
+[ "$(printf '%s' "$pj" | jq -r '.missing_ifs')" = "ifb-wan wan" ] \
+	&& ok "missing_ifs names both absent devices" || fail "missing_ifs wrong: $pj"
+[ "$(printf '%s' "$pj" | jq -r '.running')" = true ] \
+	&& ok "a parked instance still reports running (the process is alive)" || fail "running wrong: $pj"
+
+# the same instance, once its interfaces exist, is merely warming up
+netd_parked="$tmp/net-parked"; mkdir -p "$netd_parked/ifb-wan" "$netd_parked/wan"
+pj2=$(CAKE_AUTORATE_RUN_DIR="$rund" CAKE_AUTORATE_CONFIG_PREFIX="$cfgd" \
+	CAKE_AUTORATE_NET_DIR="$netd_parked" status_instance_json parked)
+[ "$(printf '%s' "$pj2" | jq -r '.reason')" = no-data ] \
+	&& ok "interfaces present but no SUMMARY yet -> reason no-data" || fail "warm-up case wrong: $pj2"
+
+# config_value: bare and double-quoted assignments, last one wins
+printf 'dl_if="a"\nul_if=b\ndl_if="c"\n' > "$tmp/cv.sh"
+[ "$(config_value "$tmp/cv.sh" dl_if)" = c ] \
+	&& ok "config_value: quoted value, last assignment wins" || fail "config_value quoted wrong"
+[ "$(config_value "$tmp/cv.sh" ul_if)" = b ] \
+	&& ok "config_value: bare value" || fail "config_value bare wrong"
+[ -z "$(config_value "$tmp/nosuchfile" dl_if)" ] \
+	&& ok "config_value: unreadable file yields nothing" || fail "config_value missing-file wrong"
+
+# ==========================================================================
+echo
 echo "== 4. sqm_interfaces: SQM-derived choices + mismatch detection"
 cat > "$tmp/sqm" <<'EOF'
 config queue 'eth1'
@@ -210,6 +297,64 @@ e2=$(printf '%s' "$ij" | jq -c '.interfaces[] | select(.egress=="eth2")')
 ij0=$(CAKE_AUTORATE_SQM_CONFIG="$tmp/nosuchsqm" CAKE_AUTORATE_NET_DIR="$netd" do_sqm_interfaces)
 [ "$(printf '%s' "$ij0" | jq -r '.sqm_config_present')" = false ] \
 	&& ok "missing /etc/config/sqm -> sqm_config_present == false" || fail "missing sqm not handled: $ij0"
+
+# ==========================================================================
+echo
+echo "== 4b. sqm_interfaces: is a CAKE qdisc actually attached?"
+# /etc/config/sqm naming an interface proves nothing: the queue can be disabled,
+# the service can be off, or the qdisc can be fq_codel. Only `tc` proves there is
+# something for cake-autorate to adjust.
+bin="$tmp/bin"; mkdir -p "$bin"
+cat > "$bin/tc" <<'EOF'
+#!/bin/sh
+# stub tc: only eth1 + ifb4eth1 carry cake; everything else gets fq_codel.
+dev=''
+while [ $# -gt 0 ]; do
+	[ "$1" = dev ] && { dev="$2"; shift; }
+	shift
+done
+case "$dev" in
+	eth1|ifb4eth1) echo "qdisc cake 8001: root refcnt 2 bandwidth 100Mbit diffserv3" ;;
+	*)             echo "qdisc fq_codel 0: root refcnt 2 limit 10240p flows 1024" ;;
+esac
+EOF
+chmod +x "$bin/tc"
+printf '#!/bin/sh\n[ "$1" = enabled ] && exit 0\nexit 1\n' > "$bin/sqm-on"
+printf '#!/bin/sh\nexit 1\n' > "$bin/sqm-off"
+chmod +x "$bin/sqm-on" "$bin/sqm-off"
+
+ijc=$(CAKE_AUTORATE_SQM_CONFIG="$tmp/sqm" CAKE_AUTORATE_NET_DIR="$netd" \
+	CAKE_AUTORATE_TC="$bin/tc" CAKE_AUTORATE_SQM_INIT="$bin/sqm-on" do_sqm_interfaces)
+printf '%s' "$ijc" | jq -e . >/dev/null 2>&1 \
+	&& ok "sqm_interfaces with qdisc probing is valid JSON" || fail "not valid JSON: $ijc"
+[ "$(printf '%s' "$ijc" | jq -r '.sqm_service_enabled')" = true ] \
+	&& ok "sqm_service_enabled == true when the init script reports enabled" || fail "sqm_service_enabled wrong: $ijc"
+[ "$(printf '%s' "$ijc" | jq -r '.cake_devices | sort | join(",")')" = "eth1,ifb4eth1" ] \
+	&& ok "cake_devices lists exactly the devices carrying a CAKE qdisc" \
+	|| fail "cake_devices wrong: $(printf '%s' "$ijc" | jq -c '.cake_devices')"
+e1c=$(printf '%s' "$ijc" | jq -c '.interfaces[] | select(.egress=="eth1")')
+[ "$(printf '%s' "$e1c" | jq -r '.egress_cake')" = true ] \
+	&& ok "eth1 egress_cake == true" || fail "eth1 egress_cake wrong: $e1c"
+[ "$(printf '%s' "$e1c" | jq -r '.ingress_cake')" = true ] \
+	&& ok "ifb4eth1 ingress_cake == true" || fail "eth1 ingress_cake wrong: $e1c"
+e2c=$(printf '%s' "$ijc" | jq -c '.interfaces[] | select(.egress=="eth2")')
+[ "$(printf '%s' "$e2c" | jq -r '.egress_cake')" = false ] \
+	&& ok "eth2 egress_cake == false (fq_codel, not cake)" || fail "eth2 egress_cake wrong: $e2c"
+
+# service disabled, and a tc that does not exist, must both degrade to false --
+# never to a crash or invalid JSON.
+ijd=$(CAKE_AUTORATE_SQM_CONFIG="$tmp/sqm" CAKE_AUTORATE_NET_DIR="$netd" \
+	CAKE_AUTORATE_TC="$tmp/no-such-tc" CAKE_AUTORATE_SQM_INIT="$bin/sqm-off" do_sqm_interfaces)
+[ "$(printf '%s' "$ijd" | jq -r '.sqm_service_enabled')" = false ] \
+	&& ok "sqm_service_enabled == false when the init script is disabled" || fail "disabled sqm wrong: $ijd"
+[ "$(printf '%s' "$ijd" | jq -r '.cake_devices | length')" = 0 ] \
+	&& ok "cake_devices empty when tc is unavailable (no false positives)" || fail "missing tc not handled: $ijd"
+# ...and the caller must be able to tell "looked, found none" from "could not
+# look", or the UI declares a working SQM setup broken whenever tc is missing.
+[ "$(printf '%s' "$ijd" | jq -r '.tc_available')" = false ] \
+	&& ok "tc_available == false marks the qdisc probe as not run" || fail "tc_available wrong: $ijd"
+[ "$(printf '%s' "$ijc" | jq -r '.tc_available')" = true ] \
+	&& ok "tc_available == true when the probe ran" || fail "tc_available wrong: $ijc"
 
 # ==========================================================================
 echo
