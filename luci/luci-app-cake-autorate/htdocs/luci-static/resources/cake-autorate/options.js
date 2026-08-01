@@ -26,7 +26,7 @@ var DOC = 'https://github.com/lynxthecat/cake-autorate/wiki';
 var OPTIONS = [
 	/* ---- essentials (8) ------------------------------------------------ */
 	{ name: 'dl_if', group: 'essentials', type: 'string',
-	  desc: 'Interface carrying the download (ingress) CAKE qdisc, normally the SQM IFB device (e.g. ifb4eth1). Placeholder here; a later release derives it from the live SQM config.',
+	  desc: 'Interface carrying the download (ingress) CAKE qdisc, normally the SQM IFB device (e.g. ifb4eth1).',
 	  units: 'interface name, non-empty' },
 	{ name: 'ul_if', group: 'essentials', type: 'string',
 	  desc: 'Interface carrying the upload (egress) CAKE qdisc, i.e. the WAN device.',

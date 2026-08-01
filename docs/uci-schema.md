@@ -76,10 +76,11 @@ everything else defaults to a working value.
 | `base_ul_shaper_rate_kbps` | `20000` | |
 | `max_ul_shaper_rate_kbps` | `35000` | |
 
-`dl_if`/`ul_if` keep upstream's own default strings. They are placeholders, but
-they **may not be blanked**: upstream rejects an empty value for any string
-option whose default is non-empty (`dl_if`, `ul_if`, `pinger_binary`). LuCI
-derives the real values from the live SQM config (task 9).
+`dl_if`/`ul_if` keep upstream's own default strings, which are almost certainly
+wrong for a given line — but they **may not be blanked**: upstream rejects an
+empty value for any string option whose default is non-empty (`dl_if`, `ul_if`,
+`pinger_binary`). The LuCI form offers the real devices as SQM-derived choices
+and warns when a value is not backed by a live CAKE qdisc.
 
 ## 3. Types — and what the bridge must emit
 
