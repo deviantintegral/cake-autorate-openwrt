@@ -372,10 +372,19 @@ so the graph is acyclic by construction.
 > to the real binary is unproven and remains Self Validation step 5 (on-device,
 > in the VM).
 
-### Phase 2: Consumers of the two contracts
+### ✅ Phase 2: Consumers of the two contracts
 **Parallel Tasks:**
-- Task 002: Pure `seedRates()` helper and unit tests (depends on: 001)
-- Task 004: Read-only `calibration` rpcd method and ACL entry (depends on: 003)
+- ✔️ Task 002: Pure `seedRates()` helper and unit tests (depends on: 001) — `completed`
+- ✔️ Task 004: Read-only `calibration` rpcd method and ACL entry (depends on: 003) — `completed`
+
+> Ran genuinely in parallel — task 002 owns only the two JavaScript files and
+> task 004 only the shell/ACL/test files, so there was no shared-file hazard.
+>
+> **Note:** `cmd_call` parses the request JSON with `jsonfilter`, which is
+> OpenWrt-only, so the `calibration` method cannot be exercised through
+> `… call calibration` off device. Verified instead by sourcing the backend with
+> `CAKE_AUTORATE_RPCD_LIB=1` and calling `do_calibration` directly. Not a defect —
+> but it means the dispatch path itself is only covered on device.
 
 ### Phase 3: User interface
 **Parallel Tasks:**

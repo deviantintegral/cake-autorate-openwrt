@@ -2,7 +2,7 @@
 id: 4
 group: "clipping-diagnosis"
 dependencies: [3]
-status: "pending"
+status: "completed"
 created: 2026-08-02
 skills:
   - posix-shell

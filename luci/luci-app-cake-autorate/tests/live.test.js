@@ -14,6 +14,8 @@
  *   - interfaceChoices(): pulling dl/ul choice lists out of `sqm_interfaces`.
  *   - interfaceStatus(): the decision behind the dl_if/ul_if warning, i.e.
  *     whether the chosen interface really has the qdisc SQM built.
+ *   - seedRates(): the min/base/max arithmetic behind "Seed rates from SQM",
+ *     including every case in which it refuses to seed a direction.
  *
  * Not tested here: the poll.add/rpc.declare wiring, the DOM table build and the
  * CBI combobox declaration. Those are LuCI framework glue, covered end to end
@@ -188,6 +190,79 @@ test('interfaceStatus: dl value with no live IFB device -> warn', function () {
 	const s = mod.interfaceStatus('ifb4eth9', SQM, 'dl');
 	assert.strictEqual(s.level, 'warn');
 	assert.ok(/ifb4eth1/.test(s.message), 'lists the valid ingress choices');
+});
+
+/* ---- seedRates ----------------------------------------------------------- */
+const SQM_RATES = {
+	sqm_config_present: true,
+	egress_choices: ['eth1'],
+	ingress_choices: ['ifb4eth1'],
+	interfaces: [{
+		egress: 'eth1', ingress_ifb: 'ifb4eth1', sqm_enabled: true,
+		ifb_present: true, mismatch: false,
+		download_kbps: 90000, upload_kbps: 11000
+	}]
+};
+
+test('seedRates: normal rates -> base=max=SQM rate, min=rate/4, per direction', function () {
+	const s = mod.seedRates(SQM_RATES, 'eth1');
+	/* dl comes from download_kbps, ul from upload_kbps -- never transposed. */
+	assert.deepStrictEqual(s.dl, { min: 22500, base: 90000, max: 90000 });
+	assert.deepStrictEqual(s.ul, { min: 2750, base: 11000, max: 11000 });
+});
+
+test('seedRates: 0 in one direction only -> that direction null, the other still seeded', function () {
+	/* sqm-scripts' "no limit" sentinel. The usable direction must survive it. */
+	const s = mod.seedRates({
+		interfaces: [{ egress: 'eth1', download_kbps: 90000, upload_kbps: 0 }]
+	}, 'eth1');
+	assert.deepStrictEqual(s.dl, { min: 22500, base: 90000, max: 90000 });
+	assert.strictEqual(s.ul, null);
+
+	/* ...and the mirror case, to prove the two are genuinely independent. */
+	const t = mod.seedRates({
+		interfaces: [{ egress: 'eth1', download_kbps: 0, upload_kbps: 11000 }]
+	}, 'eth1');
+	assert.strictEqual(t.dl, null);
+	assert.deepStrictEqual(t.ul, { min: 2750, base: 11000, max: 11000 });
+});
+
+test('seedRates: min floors -- an indivisible-by-four rate never yields a fraction', function () {
+	const s = mod.seedRates({
+		interfaces: [{ egress: 'eth1', download_kbps: 4999, upload_kbps: 4999 }]
+	}, 'eth1');
+	assert.deepStrictEqual(s.dl, { min: 1249, base: 4999, max: 4999 });
+	assert.deepStrictEqual(s.ul, { min: 1249, base: 4999, max: 4999 });
+});
+
+test('seedRates: no interface matches egressIface -> both directions null', function () {
+	assert.deepStrictEqual(mod.seedRates(SQM_RATES, 'eth9'), { dl: null, ul: null });
+	assert.deepStrictEqual(mod.seedRates(SQM_RATES, ''), { dl: null, ul: null });
+	assert.deepStrictEqual(mod.seedRates(SQM_RATES, undefined), { dl: null, ul: null });
+});
+
+test('seedRates: empty / missing sqm object -> both directions null', function () {
+	assert.deepStrictEqual(mod.seedRates({}, 'eth1'), { dl: null, ul: null });
+	assert.deepStrictEqual(mod.seedRates({ interfaces: [] }, 'eth1'), { dl: null, ul: null });
+	assert.deepStrictEqual(mod.seedRates(undefined, 'eth1'), { dl: null, ul: null });
+	assert.deepStrictEqual(mod.seedRates(null, 'eth1'), { dl: null, ul: null });
+});
+
+test('seedRates: missing, negative or non-numeric rate -> that direction null', function () {
+	const missing = mod.seedRates({ interfaces: [{ egress: 'eth1' }] }, 'eth1');
+	assert.deepStrictEqual(missing, { dl: null, ul: null });
+
+	const bad = mod.seedRates({
+		interfaces: [{ egress: 'eth1', download_kbps: -90000, upload_kbps: 'lots' }]
+	}, 'eth1');
+	assert.deepStrictEqual(bad, { dl: null, ul: null });
+
+	/* A fractional rate is refused, not rounded: cake-autorate's rates are
+	 * integer Kbit/s and a decimal point is fatal upstream. */
+	const frac = mod.seedRates({
+		interfaces: [{ egress: 'eth1', download_kbps: 4999.5, upload_kbps: null }]
+	}, 'eth1');
+	assert.deepStrictEqual(frac, { dl: null, ul: null });
 });
 
 console.log('\n' + passed + ' tests passed');

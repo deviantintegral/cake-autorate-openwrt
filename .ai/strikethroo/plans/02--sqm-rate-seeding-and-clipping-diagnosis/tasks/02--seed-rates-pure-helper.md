@@ -2,7 +2,7 @@
 id: 2
 group: "sqm-rate-seeding"
 dependencies: [1]
-status: "pending"
+status: "completed"
 created: 2026-08-02
 skills:
   - javascript

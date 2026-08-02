@@ -8,7 +8,7 @@
 				"/var/log/cake-autorate.*.log.old": [ "read" ]
 			},
 			"ubus": {
-				"cake-autorate": [ "sqm_interfaces", "status" ]
+				"cake-autorate": [ "sqm_interfaces", "status", "calibration" ]
 			}
 		},
 		"write": {

@@ -18,8 +18,12 @@
  *       ul_load_condition, cake_dl_rate_kbps, cake_ul_rate_kbps, datetime,
  *       epoch }, ... }   (available:false carries reason: no-log | no-data)
  *   sqm_interfaces {}  -> { sqm_config_present, interfaces:[{egress, ingress_ifb,
- *       sqm_enabled, ifb_present, mismatch}], egress_choices, ingress_choices,
- *       ifb_devices }.  dl_if <- ingress (ifb) choices; ul_if <- egress choices.
+ *       sqm_enabled, ifb_present, mismatch, download_kbps, upload_kbps}],
+ *       egress_choices, ingress_choices, ifb_devices }.
+ *       dl_if <- ingress (ifb) choices; ul_if <- egress choices.
+ *       The two *_kbps rates are always numbers, and 0 is overloaded: it is both
+ *       sqm-scripts' "no limit" sentinel and the backend's "unusable value"
+ *       fallback. Either way it carries no rate, so seedRates() refuses it.
  */
 
 /* Numeric summary fields, normalized to a JS number or null. */
@@ -190,11 +194,64 @@ function interfaceStatus(value, sqm, direction) {
 	return { level: 'ok', message: 'Backed by the live SQM ingress IFB device "' + value + '".' };
 }
 
+/*
+ * rateTrio(rate) -- one direction's SQM rate -> its min/base/max trio, or null
+ * when the rate carries nothing to seed from.
+ *
+ * base = max = the SQM rate: that is the rate the user told SQM the line does,
+ * so autorate may shape DOWN from it but never probes above a rate the user has
+ * not validated. min is a deliberately conservative floor -- an over-optimistic
+ * min is the one value that actively harms, since it is a hard floor the daemon
+ * cannot shape below when the line degrades.
+ *
+ * Math.floor is not cosmetic: cake-autorate's rates are integer Kbit/s and a
+ * decimal point is a fatal type error upstream, so a fractional rate in is
+ * refused rather than rounded into a value the user never configured.
+ */
+function rateTrio(rate) {
+	var r = toNum(rate);
+	if (r == null || r <= 0 || Math.floor(r) !== r)
+		return null;
+	return { min: Math.floor(r / 4), base: r, max: r };
+}
+
+/*
+ * seedRates(sqm, egressIface) -- the SQM section matching egressIface -> the two
+ * trios the Essentials form is seeded from: { dl: trio|null, ul: trio|null }.
+ *
+ * The direction mapping is sqm-scripts': SQM's `download` is the ingress rate
+ * (cake-autorate's dl_*) and `upload` the egress rate (ul_*).
+ *
+ * The directions resolve independently because SQM commonly has one rate set
+ * and the other left at 0 ("no limit"), which carries nothing to seed from; a
+ * usable download must still seed dl even when upload is unusable. The caller
+ * decides what to say about a null -- this function never guesses a rate.
+ */
+function seedRates(sqm, egressIface) {
+	var list = (sqm && Array.isArray(sqm.interfaces)) ? sqm.interfaces : [];
+	var match = null;
+
+	for (var i = 0; i < list.length; i++) {
+		if (list[i] && list[i].egress === egressIface) {
+			match = list[i];
+			break;
+		}
+	}
+	if (!match)
+		return { dl: null, ul: null };
+
+	return {
+		dl: rateTrio(match.download_kbps),
+		ul: rateTrio(match.upload_kbps)
+	};
+}
+
 return baseclass.extend({
 	STATUS_FIELDS: STATUS_FIELDS,
 	formatUptime: formatUptime,
 	statusRow: statusRow,
 	statusRows: statusRows,
 	interfaceChoices: interfaceChoices,
-	interfaceStatus: interfaceStatus
+	interfaceStatus: interfaceStatus,
+	seedRates: seedRates
 });
