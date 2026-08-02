@@ -1,5 +1,5 @@
 {
-	"admin/services/cake-autorate": {
+	"admin/network/cake-autorate": {
 		"title": "CAKE Autorate",
 		"order": 60,
 		"action": {
@@ -10,7 +10,7 @@
 			"uci": { "cake-autorate": true }
 		}
 	},
-	"admin/services/cake-autorate/overview": {
+	"admin/network/cake-autorate/overview": {
 		"title": "Configuration",
 		"order": 10,
 		"action": {
@@ -21,7 +21,7 @@
 			"acl": [ "luci-app-cake-autorate" ]
 		}
 	},
-	"admin/services/cake-autorate/status": {
+	"admin/network/cake-autorate/status": {
 		"title": "Status",
 		"order": 20,
 		"action": {

@@ -19,7 +19,7 @@ repository key. Verify them against `SHA256SUMS` below before installing.
 OpenWrt repositories.
 
 Then configure at least one instance's interfaces and rates (LuCI →
-**Network → Cake Autorate**, or `/etc/config/cake-autorate`), set
+**Network → CAKE Autorate**, or `/etc/config/cake-autorate`), set
 `option enabled '1'`, and start it:
 
 ```sh
