@@ -505,8 +505,28 @@ calibration_data_dir() {
 			END { if (!done && first != "") print first }
 		' "$f")
 	fi
-	[ -n "$dd" ] || dd='/tmp/rrd'
 	printf '%s' "$dd"
+}
+
+# The RRD roots to search, most authoritative first, one per line.
+#
+# When luci_statistics names a DataDir that is the answer and the only candidate.
+# When it does not, guessing a single default is wrong: OpenWrt's shipped
+# luci_statistics sets /tmp/rrd, but collectd's own compiled-in default is
+# /var/lib/collectd/rrd, and that is what a box running collectd WITHOUT
+# luci-app-statistics' rrdtool config actually uses -- confirmed on the
+# integration VM, whose real RRDs live in /var/lib/collectd/rrd/<host>/. Probing
+# both matters because picking wrong is SILENT: the directory simply is not
+# there, the method reports no-rrd, and the feature looks like it has no data
+# rather than like it is looking in the wrong place.
+calibration_data_dir_candidates() {
+	local dd
+	dd=$(calibration_data_dir)
+	if [ -n "$dd" ]; then
+		printf '%s\n' "$dd"
+		return 0
+	fi
+	printf '%s\n' '/var/lib/collectd/rrd' '/tmp/rrd'
 }
 
 # calibration_instance_dir <instance>
@@ -516,29 +536,42 @@ calibration_data_dir() {
 # derives the one it labels its PUTVAL lines with. Always prints a well-formed
 # path -- the caller decides what a missing file means.
 calibration_instance_dir() {
-	local inst="$1" dd cand sys first='' only='' n=0 d
-	dd=$(calibration_data_dir)
+	local inst="$1" dd cand sys first='' only='' n=0 d roots
+
 	sys=$(cat /proc/sys/kernel/hostname 2>/dev/null || hostname 2>/dev/null || true)
-	for cand in "${COLLECTD_HOSTNAME:-}" "$sys"; do
-		[ -n "$cand" ] || continue
-		[ -n "$first" ] || first="$cand"
-		[ -d "$dd/$cand/cake_autorate-$inst" ] || continue
-		printf '%s' "$dd/$cand/cake_autorate-$inst"
-		return 0
+	roots=$(calibration_data_dir_candidates)
+
+	# Pass 1: an exact host directory under any candidate root wins outright.
+	for dd in $roots; do
+		for cand in "${COLLECTD_HOSTNAME:-}" "$sys"; do
+			[ -n "$cand" ] || continue
+			[ -n "$first" ] || first="$cand"
+			[ -d "$dd/$cand/cake_autorate-$inst" ] || continue
+			printf '%s' "$dd/$cand/cake_autorate-$inst"
+			return 0
+		done
 	done
-	# Fallback: collectd may have used an FQDN, or a Hostname set in its own
-	# config, that we cannot reconstruct here. When DataDir holds exactly one
-	# host directory there is no ambiguity about which one it is.
-	for d in "$dd"/*; do
-		[ -d "$d" ] || continue
-		n=$((n + 1))
-		only="$d"
+
+	# Pass 2: collectd may have used an FQDN, or a Hostname set in its own
+	# config, that we cannot reconstruct here. When a candidate root holds
+	# exactly one host directory there is no ambiguity about which one it is.
+	for dd in $roots; do
+		n=0; only=''
+		for d in "$dd"/*; do
+			[ -d "$d" ] || continue
+			n=$((n + 1))
+			only="$d"
+		done
+		if [ "$n" = 1 ] && [ -d "$only/cake_autorate-$inst" ]; then
+			printf '%s' "$only/cake_autorate-$inst"
+			return 0
+		fi
 	done
-	if [ "$n" = 1 ]; then
-		printf '%s' "$only/cake_autorate-$inst"
-		return 0
-	fi
-	printf '%s' "$dd/${first:-localhost}/cake_autorate-$inst"
+
+	# Nothing matched. Report the most plausible path so the no-rrd reason names
+	# somewhere a human can go and look.
+	set -- $roots
+	printf '%s' "${1}/${first:-localhost}/cake_autorate-$inst"
 }
 
 # calibration_bounds <instance>

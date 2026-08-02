@@ -439,9 +439,41 @@ each is an unrun check.
 | 1 | Six fast shell suites | ✅ pass — bridge 38/38, schema 29/29, rpcd 155/155, service, collectd parser 18 (unmodified), nounset 4/4 |
 | 2 | Two node JS suites | ✅ pass — `live.test.js` 40, `options-coverage.test.js` 23 |
 | 3 | Dependency lines vs `origin/main` | ✅ pass — both Makefiles byte-identical on `DEPENDS`/`PKG_ARCH`; still noarch, no new dependency |
-| 4 | `tests/integration/run.sh` + `ubus call cake-autorate calibration` in the VM | ❌ **not run** — `qemu-system-x86_64` is not installed |
-| 5 | `rrdtool fetch` against a real RRD; confirm `xport` absent | ❌ **not run** — no rrdtool binary and no VM |
-| 6 | `npx playwright test --project=functional` | ❌ **not run** — same missing QEMU; specs parse and all 3 register under the project, nothing more |
+| 4 | `tests/integration/run.sh` + `ubus call cake-autorate calibration` in the VM | ✅ **closed by CI** — the VM integration job passed, and its negative self-test correctly failed |
+| 5 | `rrdtool fetch` against a real RRD; confirm `xport` absent | ❌ **still open** — nothing in either suite runs `calibration` against real accumulated RRDs, so the 1.0.x `fetch` output shape and `--start end-7d` are still unexercised against the binary |
+| 6 | `npx playwright test --project=functional` | ✅ **closed by CI** — ran against a live LuCI VM with `CA_IT_REQUIRE_KVM=1` (a no-KVM skip would have been a hard failure); **12 passed**, including all three new tests |
+
+### Defect found by CI evidence, and fixed
+
+The integration VM's real RRDs are at `/var/lib/collectd/rrd/<host>/…` —
+collectd's own compiled-in default — **not** the `/tmp/rrd` that OpenWrt's
+shipped `luci_statistics` sets and that this implementation used as its sole
+fallback. On any box where `luci_statistics` does not set `DataDir`, the method
+would have looked in the wrong place and reported `no-rrd`: the feature would
+appear to have no data rather than to be misconfigured. Exactly the silent
+degradation flagged as the main risk.
+
+Fixed by probing both roots when no `DataDir` is configured, collectd's default
+first. An explicitly configured `DataDir` remains the only candidate — no silent
+second guess. Four regression checks pin the order and the count (rpcd suite
+155 → 159); reverting to the single-default behaviour fails three of them.
+
+### Remaining follow-ups (not blockers for review)
+
+- **Step 5** needs a device with accumulated RRDs: run
+  `rrdtool fetch <a real cake_autorate RRD> AVERAGE --start end-7d` and compare
+  with `tests/rpcd/fixtures/rrdtool-fetch-normal.txt`. If the shape differs, only
+  `rrd_samples` and those fixtures change — that isolation is why task 003
+  existed. The Playwright notice test proves the method runs on device and
+  returns a valid degradation reason, but a fresh VM has no samples, so the parse
+  path itself is still only fixture-tested.
+- **Visual baselines** report 2 failures — but they reported **2 failures on the
+  docs-only commit too**, before any code changed, so the staleness pre-dates this
+  work rather than being caused by it. The step is advisory
+  (`continue-on-error: true`). Refresh with
+  `npx playwright test --project=visual --update-snapshots` on a QEMU-capable
+  machine.
+- `live.test.js` / `options-coverage.test.js` are still run by nothing in CI.
 
 **Why this matters.** Steps 5 and 6 are the ones carrying real risk. The RRDtool
 1.0.x `fetch` output shape and the `--start end-7d` argument are *assumptions*

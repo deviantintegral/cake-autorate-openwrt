@@ -752,6 +752,29 @@ printf '%s' "$cl" | jq -e . >/dev/null 2>&1 && ok "cmd_list is valid JSON" || fa
 [ "$(printf '%s' "$cl" | jq -r '.calibration | has("instance")')" = true ] \
 	&& ok "cmd_list declares calibration's instance argument" || fail "calibration args wrong: $cl"
 
+# --- RRD root candidates -----------------------------------------------------
+# Regression: the CI integration VM's real RRDs live under /var/lib/collectd/rrd
+# (collectd's own compiled-in default), NOT the /tmp/rrd that OpenWrt's shipped
+# luci_statistics sets. Probing only one of the two is silent when wrong -- the
+# directory is simply absent, so the method reports no-rrd and the feature looks
+# like it has no data rather than like it is looking in the wrong place.
+cand_empty=$(CAKE_AUTORATE_STATISTICS_CONFIG=/nonexistent CAKE_AUTORATE_RRD_DIR='' \
+	sh -c ". '$root/net/cake-autorate/files/cake-autorate.rpcd'; calibration_data_dir_candidates" 2>/dev/null)
+[ "$(printf '%s\n' "$cand_empty" | sed -n 1p)" = '/var/lib/collectd/rrd' ] \
+	&& ok "with no configured DataDir, collectd's own default is tried first" \
+	|| fail "first RRD candidate was: $(printf '%s\n' "$cand_empty" | sed -n 1p)"
+[ "$(printf '%s\n' "$cand_empty" | sed -n 2p)" = '/tmp/rrd' ] \
+	&& ok "with no configured DataDir, OpenWrt's /tmp/rrd is tried second" \
+	|| fail "second RRD candidate was: $(printf '%s\n' "$cand_empty" | sed -n 2p)"
+[ "$(printf '%s\n' "$cand_empty" | grep -c .)" = 2 ] \
+	&& ok "exactly two fallback RRD roots are probed" \
+	|| fail "candidate count: $(printf '%s\n' "$cand_empty" | grep -c .)"
+cand_set=$(CAKE_AUTORATE_RRD_DIR=/explicit/root \
+	sh -c ". '$root/net/cake-autorate/files/cake-autorate.rpcd'; calibration_data_dir_candidates" 2>/dev/null)
+[ "$cand_set" = '/explicit/root' ] \
+	&& ok "an explicit DataDir is the ONLY candidate (no silent second guess)" \
+	|| fail "explicit DataDir produced: $cand_set"
+
 # --- ACL: read only, never write --------------------------------------------
 ACL="$root/luci/luci-app-cake-autorate/root/usr/share/rpcd/acl.d/luci-app-cake-autorate.json"
 jq -e . "$ACL" >/dev/null 2>&1 && ok "ACL file is valid JSON" || fail "ACL is not valid JSON"

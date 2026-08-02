@@ -109,10 +109,16 @@ direction, from the read-only rpcd `calibration` method.
 
 It reads the shaper rate collectd has already recorded for the instance
 (`bitrate-dl_shaper.rrd` and `bitrate-ul_shaper.rrd` under the statistics
-`DataDir`, `/tmp/rrd` unless you moved it) over the **last 7 days**, and asks one
+`DataDir`) over the **last 7 days**, and asks one
 question: did the shaper *sit at* a configured bound instead of moving between
 them? A shaper that never leaves a bound is direct evidence that the bound, not
 the line, is what limits it — the controller wanted to go further and could not.
+
+`DataDir` comes from your `luci_statistics` config. When it is not set there,
+both defaults in play are searched — collectd's own `/var/lib/collectd/rrd` and
+the `/tmp/rrd` OpenWrt's shipped `luci_statistics` uses — because guessing just
+one is silent when wrong: the directory is simply absent, and the notice would
+report "no data yet" while looking in the wrong place.
 
 | Verdict | Means | What to do |
 | --- | --- | --- |
