@@ -97,9 +97,13 @@ interface.
   prune) on start/reload and aborts the (re)start if the bridge fails, so a
   half-written config never reaches the daemon.
 - **rpcd object `cake-autorate`** exposes `sqm_interfaces` (read, derives dl_if/
-  ul_if choices from live SQM), `status` (read, per-instance from the log),
-  `service` (write, start/stop/restart/reload). Instance names are validated
-  against `[A-Za-z0-9_]+`; service actions against a fixed allowlist.
+  ul_if choices from live SQM, plus its configured download/upload rates the
+  LuCI seed action fills the form from), `status` (read, per-instance from the
+  log), `calibration` (read, per-instance clipping verdict from the shaper-rate
+  RRDs — read-only and stateless, which is why it needed no UCI key and so never
+  touched Invariant 1), `service` (write, start/stop/restart/reload). Instance
+  names are validated against `[A-Za-z0-9_]+`; service actions against a fixed
+  allowlist.
 - **libuci + `set -u`.** OpenWrt's `/lib/functions.sh` is not nounset-clean; any
   script that runs `set -u` and sources it must wrap the `config_load`/
   `config_foreach` block in `set +u` (the bridge and the rpcd backend both do).

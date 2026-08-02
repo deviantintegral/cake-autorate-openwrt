@@ -59,6 +59,100 @@ leave it `0` until the interfaces and rates are correct, then set `1`.
 > their decimal point and no value may be negative — the config bridge rejects a
 > malformed value rather than silently passing garbage to the daemon.
 
+### Seed the six rates from SQM
+
+Six unknown numbers on a blank form is the worst part of a fresh install — so
+LuCI offers a starting point taken from a number you have already committed to.
+Below the rate fields on **Essentials** there is a **Seed rates from SQM**
+button. It reads SQM's own configured rates for this instance (the `download` /
+`upload` options in `/etc/config/sqm`, returned per interface by the same rpcd
+`sqm_interfaces` method that fills the interface pickers) and fills the form:
+
+| Field | Seeded value |
+| --- | --- |
+| `base_<dir>_shaper_rate_kbps` | the SQM rate |
+| `max_<dir>_shaper_rate_kbps` | the SQM rate |
+| `min_<dir>_shaper_rate_kbps` | a quarter of the SQM rate, rounded down |
+
+The direction mapping is sqm-scripts': SQM's `download` is the ingress rate and
+seeds the `dl_*` trio, SQM's `upload` is the egress rate and seeds `ul_*`. SQM
+keys its rates on the **egress** device, so the lookup is by the instance's
+`ul_if`. The two directions resolve **independently** — SQM commonly has one rate
+set and the other left at `0` — so a usable download rate still seeds the three
+download fields, and the other three are left exactly as you had them.
+
+Setting `max` to the SQM rate rather than above it is deliberate: autorate will
+not probe past a rate you have not validated. That makes the seed safe and, on a
+line that is actually faster, slightly pessimistic — which is precisely what the
+[clipping notice](#when-a-bound-is-the-limit-not-the-line) below is for. The two
+are one design: seed conservatively, then be told when a bound has become the
+limit. `min` is a quarter because `min` is the one value that actively harms when
+it is optimistic — it is a hard floor the daemon cannot shape below.
+
+The button **writes into the form only**. Nothing is saved until you press
+**Save & Apply**, and you are expected to look at the numbers first. It disables
+itself, with a sentence naming the blocker to clear, in four cases:
+
+- SQM is not configured on this router, so there are no rates to read;
+- no upload interface has been picked yet, so there is nothing to look up;
+- the chosen `ul_if` is not an SQM egress interface (the message lists the ones
+  that are);
+- SQM's rates for that interface are `0` in **both** directions — `0` is
+  sqm-scripts' "no limit" setting, which carries no number to derive from.
+
+### When a bound is the limit, not the line
+
+A bound that is wrong is silent: the daemon starts, logs happily, and either
+under-shapes or leaves half the line unused. At the foot of the **Essentials**
+tab each instance therefore carries a **clipping notice**, one verdict per
+direction, from the read-only rpcd `calibration` method.
+
+It reads the shaper rate collectd has already recorded for the instance
+(`bitrate-dl_shaper.rrd` and `bitrate-ul_shaper.rrd` under the statistics
+`DataDir`, `/tmp/rrd` unless you moved it) over the **last 7 days**, and asks one
+question: did the shaper *sit at* a configured bound instead of moving between
+them? A shaper that never leaves a bound is direct evidence that the bound, not
+the line, is what limits it — the controller wanted to go further and could not.
+
+| Verdict | Means | What to do |
+| --- | --- | --- |
+| `pinned-max` | ≥ **90%** of samples within **0.5%** of `max_<dir>_shaper_rate_kbps` | Raise `max` if the connection can carry more. |
+| `floored-min` | ≥ 90% of samples within 0.5% of `min_<dir>_shaper_rate_kbps` | Lower `min` so the daemon can shape further down. |
+| `ok` | The shaper moved freely between the bounds | Nothing. |
+| `insufficient-data` | Fewer than **12** valid samples in the window, or no bound configured to be clipped against | The notice says which of the two. |
+
+The 0.5% tolerance is half the controller's own smallest step (the shipped
+`shaper_rate_adjust_up_load_low` / `..._down_load_low` are `1.01` / `0.99`), so a
+sample one full step away from a bound can never be counted as clipped. The
+90% threshold is high enough that a shaper merely *visiting* a bound while
+probing upward does not trigger it.
+
+Every verdict states its evidence — which bound, what share of how many samples,
+over how long — because the point is that you can weigh the claim rather than
+obey it. That is also why the sample count is always shown: RRD retention is
+usually far shorter than the 7-day window (`/tmp/rrd` means "since boot"), and a
+verdict drawn from an hour of history deserves less of your trust than one drawn
+from a week. Before any statistics exist the notice says so plainly rather than
+looking broken or, worse, reporting "fine".
+
+**The notice changes nothing.** `calibration` is granted under ubus `read` only,
+there is no apply control anywhere in the UI, and the fix is for you to edit the
+field it names and press **Save & Apply**. It is read once when the page loads,
+not polled — it summarises days of history and cannot meaningfully change while
+you are looking at it.
+
+> **It reads the shaper rate and nothing else.** It does not detect bufferbloat
+> events, and a `floored-min` verdict is not a claim that your link was
+> bufferbloated. Conditioning the verdict on the load/bufferbloat gauge would be
+> unsound: that gauge is *categorical* (`0`/`1`/`2` for idle/low/high, `+10` when
+> bufferbloat is flagged) and OpenWrt records AVERAGE-only RRAs, so the mean of
+> `2` and `12` is `7`, which denotes nothing at all. The shaper rate is a
+> slow-moving continuous value that averages meaningfully, and clipping survives
+> every layer of consolidation intact — the average of a clipped constant is that
+> constant. See
+> [`calibration-investigation.md`](calibration-investigation.md) for the full
+> reasoning, including why a built-in speed test was rejected.
+
 ## Grouped advanced options
 
 Beyond Essentials, the remaining options are organised into collapsible,

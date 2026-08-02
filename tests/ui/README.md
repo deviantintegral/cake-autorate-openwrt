@@ -20,6 +20,8 @@ project.
         02-instance-crud.spec.js
         03-essentials-only.spec.js
         04-status-controls.spec.js
+        05-rate-validation.spec.js       min <= base <= max cross-field validator
+        06-seed-and-calibration.spec.js  "Seed rates from SQM" + the clipping notice
       # task 12 adds:  visual/ + screenshot baselines
 
 `node_modules/`, `.runtime/`, `test-results/`, `playwright-report/` are
@@ -83,6 +85,11 @@ no live cells, so the same mask is a harmless no-op there.
 
 This (re)writes the baseline PNGs under `tests/ui/visual/*-snapshots/`, which are
 **committed in-repo**. Review the resulting image changes before committing.
+
+The Essentials pane carries the "Seed rates from SQM" control and the clipping
+notice, so `config-single-instance`, `config-multi-instance` and
+`config-tab-essentials` change whenever those do — expect to refresh them (on a
+machine with QEMU + KVM) after any edit to either.
 
 ### Human-review gallery (always published)
 
@@ -181,3 +188,18 @@ green result is supposed to mean "the browser actually drove a live LuCI".
 - per-instance card `.cake-instance[data-cake-instance="<inst>"]`
 - **dynamic cells** `[data-live="1"]` (with `data-field`/`data-instance`) — task 12
   MUST mask these (rates, uptime, datetime, load conditions change every poll).
+
+Essentials calibration aids (the `overview.js` header comment is the contract):
+
+- seed control row: `div.cbi-value[data-name="_seed_rates"]`
+- seed button: `button.cake-seed-btn[data-cake-seed="<instance>"]` (`disabled`
+  when there is nothing to seed)
+- seed reason: `.cake-seed-reason[data-cake-seed="<instance>"]`
+  `[data-cake-seed-state="ready|blocked"]`
+- clipping notice:
+  `.cake-calibration[data-cake-calibration="<instance>"][data-level="ok|warn|info"]`
+  `[data-available="0|1"]`, plus `data-reason="no-rrdtool|no-rrd|no-data|error"`
+  when unavailable; summary `.cake-calibration-summary`; per-direction
+  `.cake-calibration-dir[data-direction="dl|ul"]`
+  `[data-verdict="pinned-max|floored-min|ok|insufficient-data"]`
+  (`data-field="<uci_option>"` when the verdict names one)

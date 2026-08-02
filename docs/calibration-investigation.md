@@ -1,6 +1,13 @@
 # Autoconfiguration / calibration — design investigation
 
-**Status: investigation only. Nothing here is implemented or committed to.**
+**Status: partly implemented.** Stage 1 (seed the rates from SQM) and Stage 2a
+(the clipping diagnosis) have shipped — see
+[`configuration.md`](configuration.md#seed-the-six-rates-from-sqm) for what they
+do. Stage 2b (per-interval collectd aggregates), the OWD-threshold tuning that
+depends on it, and Stage 3 (the active speed test) are **not built**, and nothing
+below commits to building them. The analysis is kept as written: it is the record
+of *why* the speed test was not the first thing built, and that reasoning is
+still current. Individual stages are marked in §5.
 
 Question asked: should this feed grow a feature that measures the line — speed
 test, latency, jitter — and then recommends or sets cake-autorate's settings?
@@ -183,6 +190,9 @@ must report the window it actually has data for rather than assume a year of it.
 
 ## 4. The cheapest win is neither of those
 
+*(Written before Stage 1 shipped: `sqm_interfaces` now returns these rates and
+the Essentials tab seeds from them. Kept as the record of the reasoning.)*
+
 The rpcd backend already parses `/etc/config/sqm` for interfaces
 (`do_sqm_interfaces`), but ignores SQM's configured `download` / `upload` rates
 — numbers the user has already entered and already believes.
@@ -195,11 +205,21 @@ Highest value per unit of risk on this whole page.
 
 ## 5. Recommendation — three stages, in this order
 
-**Stage 1 — seed and explain (build this).**
+**Stage 1 — seed and explain. Built.**
 Extend the rpcd `sqm_interfaces` method to also return SQM's configured rates;
 add a "seed rates from SQM" action to the Essentials tab for an unconfigured
 instance; add a short "how to pick these six numbers" section to
 `docs/configuration.md`. Removes most of the cliff for near-zero cost and risk.
+
+> As shipped: `sqm_interfaces` returns `download_kbps` / `upload_kbps` per
+> interface (always a number; `0` means no usable rate), and the **Seed rates
+> from SQM** button fills `base` = `max` = the SQM rate and `min` = a quarter of
+> it, per direction, resolving the two directions independently. `max` is the SQM
+> rate exactly, not "at or slightly above" as sketched above — autorate should
+> not probe past a rate the user has not validated, and Stage 2a is what later
+> tells them to raise it. The button writes into the **form widgets only**; the
+> user reviews the numbers and uses the form's existing Save & Apply, so no write
+> path and no ACL change was needed.
 
 **Stage 2 — recommendations from the statistics we already collect (the actual
 feature).** A Calibration view that reads the per-instance RRDs with the
@@ -208,23 +228,45 @@ feature).** A Calibration view that reads the per-instance RRDs with the
 and a stated confidence and window ("based on 4 days of history; the link was
 never saturated in it, so max is a lower bound"). Build it in two steps:
 
-- **2a — clipping diagnosis.** Works against today's RRDs unmodified: report
-  when the shaper is pinned at the configured `max`, or floored at `min` while
-  bufferbloat is flagged, and recommend the bound that is wrong. Highest
+- **2a — clipping diagnosis. Built.** Works against today's RRDs unmodified:
+  report when the shaper is pinned at the configured `max`, or floored at `min`
+  while bufferbloat is flagged, and recommend the bound that is wrong. Highest
   confidence per unit of work on this page, and it survives the AVERAGE-only
   consolidation intact (§3.1).
-- **2b — distribution-based values.** Requires the exec reader to emit
+
+  > As shipped: a read-only rpcd `calibration` method (ACL `read`, no write
+  > entry) fetches `bitrate-{dl,ul}_shaper.rrd` over a **7-day** window and, per
+  > direction, returns `pinned-max` / `floored-min` / `ok` /
+  > `insufficient-data` with the evidence behind it — sample count, the fraction
+  > at each bound, and the configured bounds themselves. A sample counts as "at"
+  > a bound within **0.5%** of it (half the controller's smallest 1% step), a
+  > verdict needs **90%** of the window at the bound, and no verdict at all is
+  > drawn below **12** valid samples. The verdict is **display-only**: LuCI shows
+  > it at the foot of the Essentials tab, names the UCI field to change, and
+  > offers nothing that applies it — there is no Apply step and no write path, so
+  > the "explicit Apply" sketched above is not part of what was built.
+  >
+  > The "while bufferbloat is flagged" qualifier above was **deliberately
+  > dropped**. It cannot be recovered from the statistics feed for the reason in
+  > §3.1 — averaging the categorical load gauge is meaningless — and a shaper
+  > resting at `min` is already sufficient evidence that the controller wanted to
+  > go lower and could not. Do not add it back; the code says so too.
+
+- **2b — distribution-based values. Not built.** Requires the exec reader to emit
   per-interval aggregates instead of one spot sample (§3.1) so the RRDs become
   calibration-grade. Then derive `base`/`max` from the shaper-rate distribution,
   `min` from how far bufferbloat actually drove it down, and the delay
-  thresholds from the idle OWD-delta noise floor.
+  thresholds from the idle OWD-delta noise floor. The collectd reader is
+  untouched and the `SUMMARY` field contract is unchanged, so this remains
+  exactly as costed here.
 
 This is the differentiated feature: it is the only one of the three that can
 tune the delay thresholds, it costs no data and no new dependency, and it reuses
 both the log-stream interface AGENTS.md declares canonical and the stats
 pipeline built on top of it.
 
-**Stage 3 — active test, optional, only if still wanted.**
+**Stage 3 — active test, optional, only if still wanted. Not built, and not
+planned.**
 Runtime-detected optional dependency, never a hard one. Explicit data-cost
 estimate before it runs. Stops the instance and lifts the shaper via SQM's UCI,
 not raw `tc`. Reports router CPU saturation. Feeds the `max` estimate *only* —

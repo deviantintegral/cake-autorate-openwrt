@@ -415,11 +415,62 @@ and `tests/rpcd/test-rpcd.sh` passes as a whole before Phase 2 begins.
 Task 005 is alone in Phase 3 deliberately: both UI additions land in
 `overview.js`, so no other task may edit that file concurrently.
 
-### Phase 4: Verification and documentation
+### ✅ Phase 4: Verification and documentation
 **Parallel Tasks:**
-- Task 006: Playwright functional coverage for both UI additions (depends on: 005)
-- Task 007: Documentation — `docs/configuration.md`,
-  `docs/calibration-investigation.md`, `AGENTS.md` (depends on: 001, 004, 005)
+- ✔️ Task 006: Playwright functional coverage for both UI additions (depends on: 005) — `completed` (written; **not executed** — see below)
+- ✔️ Task 007: Documentation — `docs/configuration.md`,
+  `docs/calibration-investigation.md`, `AGENTS.md` (depends on: 001, 004, 005) — `completed`
+
+> Task 007 documented the **implementation**, not this plan's sketch, and found
+> two places they disagreed: the seed has four refusal reasons, not two, and the
+> shipped code has no apply step and no bufferbloat condition. Source won; the
+> divergences are recorded in the investigation's §5.
+
+## Validation Gate Outcome — HALTED BEFORE ARCHIVAL
+
+`config/hooks/POST_EXECUTION.md` requires the plan's Self Validation steps to be
+executed, and treats any step that does not pass as a gate failure. Three of the
+six cannot be executed in this environment, so **the plan is deliberately left in
+`plans/` and not archived**. Nothing below is a defect in the implementation —
+each is an unrun check.
+
+| # | Self Validation step | Outcome |
+| --- | --- | --- |
+| 1 | Six fast shell suites | ✅ pass — bridge 38/38, schema 29/29, rpcd 155/155, service, collectd parser 18 (unmodified), nounset 4/4 |
+| 2 | Two node JS suites | ✅ pass — `live.test.js` 40, `options-coverage.test.js` 23 |
+| 3 | Dependency lines vs `origin/main` | ✅ pass — both Makefiles byte-identical on `DEPENDS`/`PKG_ARCH`; still noarch, no new dependency |
+| 4 | `tests/integration/run.sh` + `ubus call cake-autorate calibration` in the VM | ❌ **not run** — `qemu-system-x86_64` is not installed |
+| 5 | `rrdtool fetch` against a real RRD; confirm `xport` absent | ❌ **not run** — no rrdtool binary and no VM |
+| 6 | `npx playwright test --project=functional` | ❌ **not run** — same missing QEMU; specs parse and all 3 register under the project, nothing more |
+
+**Why this matters.** Steps 5 and 6 are the ones carrying real risk. The RRDtool
+1.0.x `fetch` output shape and the `--start end-7d` argument are *assumptions*
+encoded in fixtures, never checked against the binary; if they are wrong, the
+clipping verdict silently degrades to `no-data` rather than failing loudly. And
+the LuCI wiring — `form.Button` + custom `renderWidget`, widget `setValue`, the
+`div[data-tab="essentials"]` pane lookup — has never touched a browser.
+
+**Next steps to close the gate**, in order:
+
+1. Push the branch and let CI run it — `.github/workflows/ci.yml` installs
+   `qemu-system-x86` and runs the integration and Playwright jobs, which covers
+   steps 4 and 6 without any local setup. This is the cheapest path.
+2. Regenerate the visual baselines on a QEMU-capable machine:
+   `cd tests/ui && npx playwright test --project=visual --update-snapshots`. The
+   Essentials tab gained a control and a notice, so
+   `config-single-instance`, `config-multi-instance` and `config-tab-essentials`
+   under `tests/ui/visual/02-config-form.spec.js-snapshots/` no longer match.
+   (CI's visual step is `continue-on-error: true`, so this will not redden the
+   pipeline — it will show as a diff.) The `docs` project reshoot
+   (`--project=docs`) refreshes `docs/images/config-essentials.png`, which now
+   frames both additions.
+3. Step 5 needs a live instance with accumulated RRDs — run
+   `rrdtool fetch <a real cake_autorate RRD> AVERAGE --start end-7d` on device and
+   compare with `tests/rpcd/fixtures/rrdtool-fetch-normal.txt`. If the shape
+   differs, only `rrd_samples` and those fixtures need changing; that isolation
+   was the reason task 003 existed.
+
+Only after 1–3 pass should this plan be archived.
 
 ### Execution Summary
 - Total Phases: 4
