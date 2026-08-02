@@ -153,10 +153,17 @@ config cake-autorate 'secondary'
 	option min_dl_shaper_rate_kbps '2000'
 	option base_dl_shaper_rate_kbps '10000'
 	option max_dl_shaper_rate_kbps '25000'
-	option min_ul_shaper_rate_kbps '1000'
+	option min_ul_shaper_rate_kbps '2000'
 	option base_ul_shaper_rate_kbps '4000'
 	option max_ul_shaper_rate_kbps '8000'
 ```
+
+> Neither minimum rate may fall **below `connection_active_thr_kbps`** (default
+> `2000`). Upstream treats that as a fatal config error and exits at startup,
+> before it opens its log file — so the instance never runs and the reason is in
+> `logread` only, never in the status view. On a sub-2 Mbit/s uplink, lower
+> `connection_active_thr_kbps` rather than setting a minimum under it. The config
+> bridge warns to syslog when it spots this combination.
 
 A section that omits an option simply keeps the package/daemon default for it.
 In LuCI, use the add/remove controls on the config page to create and delete
@@ -206,6 +213,22 @@ is installed and collectd is running you get RRD graphs with **no extra setup**.
      load and a value `>= 10` means bufferbloat is currently flagged (the load
      level is the value mod 10).
 
+### Also install `collectd-mod-sqm`
+
+Recommended for anyone reading these graphs seriously:
+
+```sh
+apk add collectd-mod-sqm
+```
+
+Not a dependency, because it measures something different: SQM's **own** qdisc
+counters (drops, backlog, per-tin behaviour) read from netlink, versus this
+package's controller-side view (chosen shaper rate, achieved rate, OWD delta,
+load state) parsed from `SUMMARY` lines. Put both plugins' panels on the same
+time axis and a bufferbloat episode reads end to end: our graphs show the rate
+the controller picked and the delay that made it pick that, `collectd-mod-sqm`
+shows what the qdisc did with the resulting budget.
+
 ### Statistics caveat
 
 The package drops its collectd config at `/etc/collectd/conf.d/cake-autorate.conf`
@@ -215,3 +238,45 @@ config must **Include `/etc/collectd/conf.d`** — the stock
 `luci-app-statistics` setup does. If you run a hand-rolled collectd config that
 does not include that directory, add it, or the CAKE Autorate graphs will not
 appear even though the daemon is logging fine.
+
+## Troubleshooting: the status view shows nothing
+
+The status view has one source of truth — `SUMMARY` lines in
+`/var/log/cake-autorate.<instance>.log` — so "no numbers" always means "no
+SUMMARY lines". The view distinguishes the reasons:
+
+| What the page says | rpcd `reason` | What it means |
+| --- | --- | --- |
+| *Setup banner: nothing to shape yet* | (from `sqm_interfaces`) | SQM is not configured / not enabled / not using `cake`. There is no qdisc to adjust. Follow the numbered steps on the banner. |
+| **Not shaping** — *Parked: the configured interface … does not exist* | `no-interface` | `dl_if`/`ul_if` name a device with no `/sys/class/net` entry. The daemon is blocked in upstream's `verify_ifs_up()` and will **never** produce a sample. This does not resolve on its own. |
+| **No data yet** — *waiting for the first sample* | `no-data` | Genuinely transient: the interfaces exist and the daemon has not written its first `SUMMARY` yet. |
+| **Stopped** | `no-log` | No log file at all — the service is stopped or has never started. |
+
+The one that used to be misdiagnosed is `no-interface`: it looks identical to a
+healthy start (green `running` badge, log file growing) but resolves only when
+the device appears. The usual cause is a fresh install where SQM was never set
+up, still carrying upstream's placeholder defaults `dl_if=ifb-wan` /
+`ul_if=wan` — neither of which is a real OpenWrt device name.
+
+### Checking by hand
+
+```sh
+tc qdisc show | grep cake            # empty  => SQM is not shaping at all
+ls -d /sys/class/net/ifb4*           # missing => SQM never created the ingress device
+logread -e cake-autorate             # bridge warnings + upstream startup errors
+ubus call cake-autorate status       # exactly what the LuCI page renders
+grep -c '^SUMMARY; ' /var/log/cake-autorate.*.log*
+```
+
+`logread` is the important one for startup failures. Upstream's fatal config
+checks (missing `fping`, `dl_if == ul_if`, `connection_active_thr_kbps` greater
+than either `min_*_shaper_rate_kbps`) run *before* it opens the log file, so
+those errors only ever reach syslog — never the log the status view reads.
+
+### Why the log can look empty on a healthy instance
+
+Upstream rotates the log to `<log>.old` on a wall-clock timer that fires **even
+when nothing is being logged**, and again at every daemon start. A live instance
+on an idle link (pingers asleep after `sustained_idle_sleep_thr_s`) can
+therefore end up with all its `SUMMARY` history in `.old`. Both the status
+method and the collectd source fall back to `<log>.old` for exactly this reason.

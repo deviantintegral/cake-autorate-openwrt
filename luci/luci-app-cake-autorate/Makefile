@@ -14,7 +14,14 @@ LUCI_DESCRIPTION:=Configuration and live status UI for cake-autorate, the \
 # points collectd's Include at /etc/collectd/conf.d, where the base package
 # drops its exec source. Without it there is no Statistics -> Graphs menu and
 # the graphs never get any data. Same arrangement collectd-mod-sqm uses.
-LUCI_DEPENDS:=+cake-autorate +luci-base +luci-app-statistics
+#
+# luci-app-sqm is required for the same reason, one layer down: cake-autorate
+# never creates a qdisc, it only moves the bandwidth of a CAKE qdisc sqm-scripts
+# attached. When that setup is missing our UI's whole remedy is "go configure
+# SQM", and both views link straight to admin/network/sqm -- a dead link if the
+# page is not installed. The base package already depends on sqm-scripts; this
+# adds the page a LuCI user needs to drive it.
+LUCI_DEPENDS:=+cake-autorate +luci-base +luci-app-statistics +luci-app-sqm
 LUCI_PKGARCH:=all
 
 PKG_VERSION:=1.0.0

@@ -60,6 +60,11 @@
 # unreadable file, an unwritable config dir). A bad value in one instance skips
 # just that instance, with a warning, and still exits 0 -- one misconfigured WAN
 # must never take the others down.
+#
+# Environment (test overrides):
+#   CAKE_AUTORATE_CONFIG_PREFIX  output dir (default /etc/cake-autorate)
+#   CAKE_AUTORATE_NET_DIR        device dir for the dl_if/ul_if preflight
+#                                (default /sys/class/net)
 
 set -u
 
@@ -75,6 +80,15 @@ warn() { printf '%s: %s\n' "$PROG" "$*" >&2; }
 logmsg() {
 	warn "$*"
 	command -v logger >/dev/null 2>&1 && logger -t "$PROG" -p daemon.warn "$*"
+}
+
+# _generated_int FILE KEY DEFAULT: read an integer assignment back out of a
+# generated config. An absent key means the daemon falls back to its own
+# built-in default, so the caller passes that default in rather than assuming 0.
+_generated_int() {
+	local v
+	v=$(sed -n "s/^$2=\([0-9][0-9]*\)$/\1/p" "$1" | tail -n1)
+	printf '%s' "${v:-$3}"
 }
 
 # section_skip: one section failed, the run carries on. The main loop ignores
@@ -371,7 +385,9 @@ stream_from_libuci() {
 }
 
 # Invoked indirectly by config_foreach (libuci mode only).
-# shellcheck disable=SC2317
+# SC2329 is the ShellCheck >= 0.10 spelling of the same "never invoked" finding
+# SC2317 covers; both are listed so the directive holds across versions.
+# shellcheck disable=SC2317,SC2329
 _libuci_emit_section() {
 	local sid="$1" opt val r
 	printf 'section\tcake-autorate\t%s\n' "$sid"
@@ -556,6 +572,41 @@ process_section() {
 		rm -f "$out"
 		section_skip "$name" "coverage mismatch (see above)"
 		return 1
+	fi
+
+	# ----- Interface preflight (WARN, never skip) -----
+	# upstream's verify_ifs_up() blocks forever, before the main loop and before
+	# it writes a single SUMMARY line, when dl_if/ul_if has no /sys/class/net
+	# entry -- and it only says so at DEBUG level, which the package turns off by
+	# default. The result is a daemon that looks healthy and does nothing.
+	#
+	# This is deliberately a warning and NOT a section_skip: waiting for an
+	# interface is a legitimate upstream behaviour (an ifb can appear after us at
+	# boot, and a WAN can bounce), so refusing to write the config would turn a
+	# self-healing wait into a hard failure. We make the state VISIBLE instead --
+	# here in syslog, and in the LuCI status view via the rpcd `no-interface`
+	# reason, which checks the same condition against the same generated config.
+	local netdir="${CAKE_AUTORATE_NET_DIR:-/sys/class/net}" ifname ifval
+	for ifname in dl_if ul_if; do
+		ifval=$(sed -n "s/^${ifname}=\"\(.*\)\"$/\1/p" "$out" | tail -n1)
+		[ -n "$ifval" ] || continue
+		[ -d "$netdir/$ifval" ] && continue
+		logmsg "$name: $ifname '$ifval' is not a network device on this system. The daemon will start and then wait for it indefinitely, shaping nothing. Configure SQM with the CAKE queue discipline first, then set $ifname to the device SQM shapes."
+	done
+
+	# ----- Idle-threshold preflight (WARN) -----
+	# upstream exits at startup, hard, when connection_active_thr_kbps exceeds
+	# either min shaper rate -- and that check runs BEFORE it opens the log file,
+	# so the error reaches syslog only and the log the status view reads stays
+	# empty. Easy to hit on a slow uplink (the default threshold is 2000 kbit/s,
+	# which is above a plausible min_ul_shaper_rate_kbps). Surface it here rather
+	# than let procd respawn-loop an instance that can never start.
+	local act min_dl min_ul
+	act=$(_generated_int "$out" connection_active_thr_kbps 2000)
+	min_dl=$(_generated_int "$out" min_dl_shaper_rate_kbps 5000)
+	min_ul=$(_generated_int "$out" min_ul_shaper_rate_kbps 5000)
+	if [ "$act" -gt "$min_dl" ] || [ "$act" -gt "$min_ul" ]; then
+		logmsg "$name: connection_active_thr_kbps ($act) is above min_dl_shaper_rate_kbps ($min_dl) or min_ul_shaper_rate_kbps ($min_ul). The daemon REFUSES TO START in this state and logs the reason to syslog only. Lower connection_active_thr_kbps or raise the minimum shaper rates."
 	fi
 
 	# Publish.

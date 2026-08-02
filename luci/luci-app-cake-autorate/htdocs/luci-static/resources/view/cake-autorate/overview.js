@@ -392,12 +392,44 @@ return view.extend({
 				'#cake-autorate-filter{flex:1 1 20em;max-width:32em;}' +
 				'#cake-autorate-filter-status{opacity:.75;font-size:90%;}' +
 				'.cake-if-warn{margin-top:.4em;padding:.4em .6em;font-size:90%;}' +
-				'.cake-if-warn.cake-if-ok{color:#2e7d32;padding:.2em 0;}'));
+				'.cake-if-warn.cake-if-ok{color:#2e7d32;padding:.2em 0;}' +
+				'#cake-autorate-setup h3{margin-top:0;}' +
+				'.cake-setup-steps{margin:.5em 0 .75em 1.5em;}' +
+				'.cake-setup-steps li{margin:.25em 0;}' +
+				'.cake-setup-steps li[data-done="1"]{opacity:.6;}' +
+				'.cake-step-mark{font-family:monospace;}'));
 
 			nodes.push(E('p', {}, [
 				E('strong', {}, 'cake-autorate ' + PKG_VERSION), ' · ',
 				E('a', { 'href': DOC_URL, 'target': '_blank', 'rel': 'noreferrer' }, _('Upstream documentation'))
 			]));
+
+			/* Preconditions first: an unmet one makes every field below it
+			 * pointless, so it leads the page rather than sitting next to the two
+			 * interface fields where it is easy to scroll past. Same helper and
+			 * same wording as the status view's banner. */
+			var setup = live.setupState(sqm);
+			if (!setup.ok) {
+				nodes.push(E('div', {
+					'id': 'cake-autorate-setup',
+					'class': 'alert-message ' + (setup.level === 'warn' ? 'warning' : 'error'),
+					'data-cake-setup': setup.level
+				}, [
+					E('h3', {}, _('CAKE Autorate has nothing to shape yet')),
+					E('p', {}, setup.title),
+					E('p', {}, _('CAKE Autorate does not create the queue — it adjusts the bandwidth of a CAKE qdisc that SQM attaches. Remaining steps:')),
+					E('ol', { 'class': 'cake-setup-steps' }, setup.steps.map(function (step) {
+						return E('li', { 'data-done': step.done ? '1' : '0' }, [
+							E('span', { 'class': 'cake-step-mark' }, step.done ? '✓ ' : '☐ '),
+							step.text
+						]);
+					})),
+					E('p', {}, E('a', {
+						'class': 'cbi-button cbi-button-action',
+						'href': L.url(setup.link)
+					}, _('Open SQM QoS settings')))
+				]));
+			}
 
 			/* Say what the interface fields are checked against, so a missing SQM
 			 * config is not mistaken for a bug. */

@@ -66,6 +66,63 @@ jobs:
     uses: ./.github/workflows/build.yml
 
   # ---------------------------------------------------------------------------
+  # UNIT — the fast off-device suites (no SDK, no VM, no KVM): the config bridge,
+  # the UCI schema, the rpcd backend, the init script, the collectd parser, the
+  # libuci nounset regression, and the two node suites over the LuCI resources.
+  #
+  # These were documented as "CI and contributors can run directly" but nothing
+  # actually ran them, so every assertion in them was advisory. They take
+  # seconds and need no build, so they gate the whole pipeline: `build` is where
+  # the SDK time goes, and there is no reason to spend it on a tree whose
+  # parsers are already failing.
+  # ---------------------------------------------------------------------------
+  unit:
+    name: Off-device unit suites
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      # jq is what the rpcd suite asserts JSON shape with; it is preinstalled on
+      # ubuntu-24.04 runners, but assert it rather than discovering a silent skip.
+      - name: Assert jq is present
+        run: jq --version
+
+      - name: Shell suites
+        run: |
+          set -e
+          for t in tests/bridge/test-bridge.sh \
+                   tests/schema/test-uci-schema.sh \
+                   tests/rpcd/test-rpcd.sh \
+                   tests/service/test-init.sh \
+                   tests/statistics/test-collectd-parser.sh \
+                   tests/regression/test-libuci-nounset.sh; do
+            echo "::group::$t"
+            sh "$t"
+            echo "::endgroup::"
+          done
+
+      - name: Node suites (LuCI shared resources)
+        run: |
+          set -e
+          node luci/luci-app-cake-autorate/tests/live.test.js
+          node luci/luci-app-cake-autorate/tests/options-coverage.test.js
+
+      - name: ShellCheck the shipped shell payload
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck -s sh \
+            net/cake-autorate/files/cake-autorate.rpcd \
+            net/cake-autorate/files/cake-autorate-bridge.sh \
+            net/cake-autorate/files/cake-autorate-collectd.sh
+
+  # ---------------------------------------------------------------------------
   # INTEGRATION — boot the VM harness against the built apks (needs KVM).
   # ---------------------------------------------------------------------------
   integration:

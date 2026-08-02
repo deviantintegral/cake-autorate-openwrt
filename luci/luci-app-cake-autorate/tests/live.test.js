@@ -190,4 +190,153 @@ test('interfaceStatus: dl value with no live IFB device -> warn', function () {
 	assert.ok(/ifb4eth1/.test(s.message), 'lists the valid ingress choices');
 });
 
+/* ---- setupState (the "what do I do next" checklist) --------------------- */
+/*
+ * The precondition ladder, in the order a user climbs it. Every rung is someone
+ * else's setup (sqm-scripts), and an unmet rung is silent at the daemon level --
+ * upstream parks in verify_ifs_up() and reports nothing -- so this decision is
+ * the only thing standing between a user and a blank status page.
+ */
+const SQM_READY = {
+	sqm_config_present: true,
+	sqm_service_enabled: true,
+	cake_devices: ['eth1', 'ifb4eth1'],
+	egress_choices: ['eth1'],
+	ingress_choices: ['ifb4eth1'],
+	interfaces: [{
+		egress: 'eth1', ingress_ifb: 'ifb4eth1', sqm_enabled: true,
+		ifb_present: true, mismatch: false, egress_cake: true, ingress_cake: true
+	}]
+};
+
+test('setupState: no SQM config at all -> error, nothing done', function () {
+	const s = mod.setupState({});
+	assert.strictEqual(s.ok, false);
+	assert.strictEqual(s.level, 'error');
+	assert.ok(/no CAKE qdisc/i.test(s.title));
+	assert.strictEqual(s.steps.filter(function (x) { return x.done; }).length, 0);
+	assert.ok(s.steps.length >= 4, 'gives the user an ordered list to follow');
+});
+
+test('setupState: garbage / missing response degrades to the error path', function () {
+	assert.strictEqual(mod.setupState(null).ok, false);
+	assert.strictEqual(mod.setupState(undefined).level, 'error');
+});
+
+test('setupState: SQM configured but every queue disabled -> error', function () {
+	const s = mod.setupState({
+		sqm_config_present: true, sqm_service_enabled: true, cake_devices: [],
+		interfaces: [{ egress: 'eth1', sqm_enabled: false, mismatch: false }]
+	});
+	assert.strictEqual(s.ok, false);
+	assert.ok(/every queue is disabled/i.test(s.title));
+	assert.strictEqual(s.steps[0].done, true, 'the "configure SQM" step is satisfied');
+	assert.strictEqual(s.steps[1].done, false, 'the "enable the queue" step is not');
+});
+
+test('setupState: queue enabled but service disabled -> error naming the service', function () {
+	const s = mod.setupState({
+		sqm_config_present: true, sqm_service_enabled: false, cake_devices: [],
+		interfaces: [{ egress: 'eth1', sqm_enabled: true, mismatch: false }]
+	});
+	assert.strictEqual(s.ok, false);
+	assert.ok(/service is not enabled/i.test(s.title));
+});
+
+/*
+ * The trap this check exists for: SQM is configured, enabled and running, but
+ * with fq_codel. Every name-based check passes and there is still no CAKE qdisc
+ * to adjust, so only cake_devices can catch it.
+ */
+test('setupState: SQM running with a non-cake qdisc -> error, not ok', function () {
+	const s = mod.setupState({
+		sqm_config_present: true, sqm_service_enabled: true, cake_devices: [],
+		interfaces: [{
+			egress: 'eth1', ingress_ifb: 'ifb4eth1', sqm_enabled: true,
+			ifb_present: true, mismatch: false, egress_cake: false, ingress_cake: false
+		}]
+	});
+	assert.strictEqual(s.ok, false);
+	assert.ok(/cake.*not fq_codel/i.test(s.title), 'names the actual mistake');
+});
+
+test('setupState: enabled egress whose ifb was never created -> warn', function () {
+	const s = mod.setupState({
+		sqm_config_present: true, sqm_service_enabled: true, cake_devices: ['eth1'],
+		interfaces: [{
+			egress: 'eth1', ingress_ifb: 'ifb4eth1', sqm_enabled: true,
+			ifb_present: false, mismatch: true, egress_cake: true, ingress_cake: false
+		}]
+	});
+	assert.strictEqual(s.ok, false);
+	assert.strictEqual(s.level, 'warn');
+	assert.ok(/eth1/.test(s.title));
+});
+
+test('setupState: fully set up -> ok, every step done, no banner', function () {
+	const s = mod.setupState(SQM_READY);
+	assert.strictEqual(s.ok, true);
+	assert.strictEqual(s.level, 'ok');
+	assert.ok(/ifb4eth1/.test(s.title), 'names the shaped devices');
+	assert.strictEqual(s.steps.filter(function (x) { return !x.done; }).length, 0);
+});
+
+/*
+ * The regression this guards: tc missing from rpcd's PATH makes cake_devices
+ * empty for a reason that has nothing to do with the user's SQM setup. Reporting
+ * "no CAKE qdisc" then would be a confident lie about a working router.
+ */
+test('setupState: tc unavailable -> falls back to device evidence, does not cry wolf', function () {
+	const s = mod.setupState({
+		sqm_config_present: true, sqm_service_enabled: true,
+		tc_available: false, cake_devices: [],
+		interfaces: [{
+			egress: 'eth1', ingress_ifb: 'ifb4eth1', sqm_enabled: true,
+			ifb_present: true, mismatch: false
+		}]
+	});
+	assert.strictEqual(s.ok, true, 'a live ifb device is enough evidence when we cannot probe');
+	assert.ok(/could not be verified/i.test(s.title), 'says the qdisc check did not run');
+});
+
+test('setupState: tc unavailable AND no ifb device -> still an error', function () {
+	const s = mod.setupState({
+		sqm_config_present: true, sqm_service_enabled: true,
+		tc_available: false, cake_devices: [],
+		interfaces: [{
+			egress: 'eth1', ingress_ifb: 'ifb4eth1', sqm_enabled: true,
+			ifb_present: false, mismatch: true
+		}]
+	});
+	assert.strictEqual(s.ok, false);
+});
+
+test('setupState: always offers a link to the SQM page', function () {
+	assert.strictEqual(mod.setupState({}).link, mod.SQM_PAGE);
+	assert.ok(/sqm/.test(mod.SQM_PAGE));
+});
+
+/* ---- the parked-daemon fields the status view renders ------------------- */
+test('statusRow: no-interface carries reason, missing_ifs and the interfaces', function () {
+	const r = mod.statusRow('primary', {
+		available: false, running: true, reason: 'no-interface',
+		missing_ifs: 'ifb-wan wan', dl_if: 'ifb-wan', ul_if: 'wan', uptime_s: 480
+	});
+	assert.strictEqual(r.reason, 'no-interface');
+	assert.strictEqual(r.missing_ifs, 'ifb-wan wan');
+	assert.strictEqual(r.dl_if, 'ifb-wan');
+	assert.strictEqual(r.running, true);
+	assert.strictEqual(r.uptime_s, 480);
+});
+
+test('statusRow: dl_if/ul_if survive on an available row too', function () {
+	const r = mod.statusRow('primary', {
+		available: true, running: true, dl_if: 'ifb4eth1', ul_if: 'eth1',
+		cake_dl_rate_kbps: 45000
+	});
+	assert.strictEqual(r.dl_if, 'ifb4eth1');
+	assert.strictEqual(r.ul_if, 'eth1');
+	assert.strictEqual(r.reason, null);
+});
+
 console.log('\n' + passed + ' tests passed');

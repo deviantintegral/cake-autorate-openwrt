@@ -18,6 +18,9 @@
  *
  * Selectors the Playwright suites rely on:
  *   - view root:              #cake-autorate-status
+ *   - the setup banner:       #cake-autorate-setup[data-cake-setup="warn|error"]
+ *                             (absent entirely once SQM is shaping with CAKE);
+ *                             its steps are ol.cake-setup-steps > li[data-done]
  *   - global controls:        #cake-autorate-controls
  *   - a service button:       button[data-cake-action="start|stop|restart"]
  *                             (global buttons carry data-cake-instance="";
@@ -45,6 +48,15 @@ var callService = rpc.declare({
 	object: 'cake-autorate',
 	method: 'service',
 	params: ['action', 'instance'],
+	expect: { '': {} }
+});
+
+/* Preconditions, not live data: SQM's own setup is what decides whether this
+ * page can ever show a number. Fetched once per render and after a service
+ * action, NOT on the 3s poll -- it shells out to tc. */
+var callSqmInterfaces = rpc.declare({
+	object: 'cake-autorate',
+	method: 'sqm_interfaces',
 	expect: { '': {} }
 });
 
@@ -84,6 +96,19 @@ var REASON_TEXT = {
 };
 
 /*
+ * reasonText(row) -- REASON_TEXT, except for no-interface, which names the
+ * offending device. That case is not a transient "waiting": the daemon is parked
+ * in upstream's verify_ifs_up() and will never emit a sample until the device
+ * exists, so it must not be worded like the no-data one above.
+ */
+function reasonText(row) {
+	if (row.reason === 'no-interface')
+		return _('Parked: the configured interface %s does not exist on this router, so the daemon is waiting for it and will never produce a sample. Set the interfaces to the devices SQM shapes.')
+			.format(row.missing_ifs || (row.dl_if + ', ' + row.ul_if));
+	return REASON_TEXT[row.reason] || _('No live data available.');
+}
+
+/*
  * fieldText(row, field) -- what a data-live cell displays. Used by both the
  * initial card build and the in-place poll update, so the two cannot diverge.
  */
@@ -92,8 +117,10 @@ function fieldText(row, field) {
 		case 'running':   return row.running ? _('running') : _('stopped');
 		case 'uptime_s':  return live.formatUptime(row.uptime_s);
 		case 'datetime':  return fmtStr(row.datetime);
-		case 'available': return row.running ? _('No data yet') : _('Stopped');
-		case 'reason':    return REASON_TEXT[row.reason] || _('No live data available.');
+		case 'available': return row.running
+			? (row.reason === 'no-interface' ? _('Not shaping') : _('No data yet'))
+			: _('Stopped');
+		case 'reason':    return reasonText(row);
 		default:
 			return (field.indexOf('load_condition') !== -1)
 				? fmtStr(row[field]) : fmtNum(row[field]);
@@ -129,6 +156,39 @@ function metricTable(row) {
 	});
 
 	return E('table', { 'class': 'table cake-metric-table' }, rows);
+}
+
+/*
+ * setupBanner(state) -- the numbered "what to do next" list, or null once every
+ * precondition is met (a healthy router should not carry a permanent banner).
+ *
+ * This is the answer to the most common first-run report: the service says
+ * "running", the page says "waiting for the first sample", and nothing ever
+ * arrives -- because SQM was never set up and there is no CAKE qdisc to adjust.
+ */
+function setupBanner(state) {
+	if (state.ok)
+		return null;
+
+	return E('div', {
+		'id': 'cake-autorate-setup',
+		'class': 'alert-message ' + (state.level === 'warn' ? 'warning' : 'error'),
+		'data-cake-setup': state.level
+	}, [
+		E('h3', {}, _('CAKE Autorate has nothing to shape yet')),
+		E('p', {}, state.title),
+		E('p', {}, _('CAKE Autorate does not create the queue — it adjusts the bandwidth of a CAKE qdisc that SQM attaches. Remaining steps:')),
+		E('ol', { 'class': 'cake-setup-steps' }, state.steps.map(function (step) {
+			return E('li', { 'data-done': step.done ? '1' : '0' }, [
+				E('span', { 'class': 'cake-step-mark' }, step.done ? '✓ ' : '☐ '),
+				step.text
+			]);
+		})),
+		E('p', {}, E('a', {
+			'class': 'cbi-button cbi-button-action',
+			'href': L.url(state.link)
+		}, _('Open SQM QoS settings')))
+	]);
 }
 
 /* One instance card: header (name + run badge + uptime), controls, and either
@@ -189,6 +249,22 @@ return view.extend({
 
 		/* Body container that the poll refreshes in place. */
 		var bodyEl = E('div', { 'id': 'cake-autorate-status-body' });
+
+		/* Setup/precondition container. Refreshed on render and after a service
+		 * action -- not on the 3s poll, since it shells out to tc and its answer
+		 * only changes when someone edits SQM. */
+		var setupEl = E('div', { 'id': 'cake-autorate-setup-body' });
+
+		function refreshSetup() {
+			return callSqmInterfaces().then(function (sqm) {
+				var node = setupBanner(live.setupState(sqm));
+				setupEl.replaceChildren.apply(setupEl, node ? [node] : []);
+			}).catch(function () {
+				/* A failed precondition probe must never hide the status table:
+				 * drop the banner and let the per-instance rows speak. */
+				setupEl.replaceChildren();
+			});
+		}
 
 		/* The page structure depends only on which instances exist and whether
 		 * each has data (metric table vs notice). Run state and every value are
@@ -264,7 +340,7 @@ return view.extend({
 					ui.addNotification(null,
 						E('p', {}, _('%s %s returned exit code %s.').format(action, instance || _('(all instances)'), code)),
 						'warning');
-				return refresh();
+				return Promise.all([refresh(), refreshSetup()]);
 			}).catch(function (e) {
 				ui.addNotification(null,
 					E('p', {}, _('%s failed: %s').format(action, e && e.message ? e.message : e)),
@@ -285,7 +361,7 @@ return view.extend({
 				}))
 		]);
 
-		return refresh().then(function () {
+		return Promise.all([refresh(), refreshSetup()]).then(function () {
 			poll.add(refresh, POLL_INTERVAL);
 
 			return E('div', { 'id': 'cake-autorate-status', 'class': 'cbi-map' }, [
@@ -301,9 +377,15 @@ return view.extend({
 					'.cake-metric-label{font-weight:bold;}' +
 					'.cake-instance-controls{margin:.5em 0;display:flex;gap:.5em;flex-wrap:wrap;}' +
 					'.cake-unavailable{padding:.5em 0;opacity:.85;}' +
-					'.cake-lastupdate{opacity:.75;font-size:90%;}'),
+					'.cake-lastupdate{opacity:.75;font-size:90%;}' +
+					'#cake-autorate-setup h3{margin-top:0;}' +
+					'.cake-setup-steps{margin:.5em 0 .75em 1.5em;}' +
+					'.cake-setup-steps li{margin:.25em 0;}' +
+					'.cake-setup-steps li[data-done="1"]{opacity:.6;}' +
+					'.cake-step-mark{font-family:monospace;}'),
 				E('h2', {}, _('CAKE Autorate — Live status')),
 				E('p', {}, _('Per-instance live readout, refreshed every %d seconds from the running daemon. Dashed values mean no data has been parsed yet.').format(POLL_INTERVAL)),
+				setupEl,
 				globalControls,
 				bodyEl
 			]);
