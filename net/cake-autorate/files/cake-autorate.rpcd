@@ -8,8 +8,8 @@
 #     cake-autorate list             -> print the method schema (JSON)
 #     cake-autorate call <method>    -> method args arrive as JSON on stdin
 # Every method is gated by the package ACL
-# (luci/.../acl.d/luci-app-cake-autorate.json): sqm_interfaces + status are
-# "read", service is "write".
+# (luci/.../acl.d/luci-app-cake-autorate.json): sqm_interfaces + status +
+# calibration are "read", service is "write".
 #
 # METHODS
 #   sqm_interfaces            Derive shaping interfaces from the LIVE SQM config:
@@ -17,11 +17,18 @@
 #                             ifb4<iface> ingress devices SQM created. Returns
 #                             validated choices for the LuCI UI: ul_if <-
 #                             egress_choices, dl_if <- ingress_choices, plus a
-#                             per-interface mismatch flag.
+#                             per-interface mismatch flag and SQM's configured
+#                             download_kbps/upload_kbps for that interface.
 #   status {instance?}        Per-instance live status parsed from the daemon log
 #                             /var/log/cake-autorate.<instance>.log. Uses the
 #                             same 13-field SUMMARY layout as the collectd exec
 #                             reader (docs/upstream-option-inventory.md 3.3).
+#   calibration {instance}    READ-ONLY clipping diagnosis. Reads the instance's
+#                             collectd shaper-rate RRDs with `rrdtool fetch` and
+#                             reports, per direction, whether the shaper has been
+#                             sitting at the configured max or min -- i.e.
+#                             whether a bound rather than the line is the limit.
+#                             Recommends only; it writes nothing.
 #   service {action,instance?} start|stop|restart|reload the service via
 #                             /etc/init.d/cake-autorate.
 #
@@ -43,6 +50,11 @@
 #     CAKE_AUTORATE_NET_DIR    (default /sys/class/net)
 #     CAKE_AUTORATE_INSTANCES  (default: enabled UCI sections via libuci)
 #     CAKE_AUTORATE_INIT       (default /etc/init.d/cake-autorate)
+#     CAKE_AUTORATE_RRDTOOL    (default rrdtool, resolved on PATH)
+#     CAKE_AUTORATE_RRD_DIR    (default: DataDir from the luci_statistics UCI
+#                               config, else /tmp/rrd)
+#     CAKE_AUTORATE_STATISTICS_CONFIG (default /etc/config/luci_statistics)
+#     CAKE_AUTORATE_UCI_CONFIG (default /etc/config/cake-autorate)
 
 set -u
 
@@ -79,6 +91,18 @@ valid_action() {
 # emitted as an escaped JSON string.
 # --------------------------------------------------------------------------
 json_bool() { case "$1" in 1 | true | yes | on) printf 'true' ;; *) printf 'false' ;; esac; }
+
+# Emit $1 as a bare JSON number. SQM rates are non-negative integers in Kbit/s,
+# so anything else -- empty, "auto", a unit suffix, a sign, a decimal point, or a
+# leading zero (which JSON does not permit) -- degrades to 0, the same value
+# sqm-scripts uses to mean "no limit". Never emits a malformed number: a bad
+# rate must not break every consumer of this object.
+json_num() {
+	case "$1" in
+		'' | *[!0-9]* | 0?*) printf '0' ;;
+		*) printf '%s' "$1" ;;
+	esac
+}
 
 # Read newline-separated tokens on stdin, print a JSON array of strings.
 json_str_array() {
@@ -262,26 +286,31 @@ list_ifb_devices() {
 	done | sort
 }
 
-# Parse /etc/config/sqm into "iface<TAB>enabled" lines, one per section that
-# declares an `option interface`. enabled defaults to 1 when the key is absent.
+# Parse /etc/config/sqm into "iface<TAB>enabled<TAB>download<TAB>upload" lines,
+# one per section that declares an `option interface`. enabled defaults to 1 when
+# the key is absent. sqm-scripts stores both rates in Kbit/s -- already
+# cake-autorate's unit, so they are passed through unconverted; they default to
+# 0, sqm-scripts' "no limit" sentinel, which carries no rate to seed from.
 parse_sqm_sections() {
 	local f="${1:-${CAKE_AUTORATE_SQM_CONFIG:-/etc/config/sqm}}"
 	[ -f "$f" ] || return 0
 	awk '
 		function deq(s) { gsub(/["\047]/, "", s); return s }   # \047 == single quote
 		$1 == "config" {
-			if (have) print iface "\t" en
-			iface = ""; en = "1"; have = 0; next
+			if (have) print iface "\t" en "\t" dl "\t" ul
+			iface = ""; en = "1"; dl = "0"; ul = "0"; have = 0; next
 		}
 		$1 == "option" && $2 == "interface" { iface = deq($3); have = 1 }
 		$1 == "option" && $2 == "enabled"   { en = deq($3) }
-		END { if (have) print iface "\t" en }
+		$1 == "option" && $2 == "download"  { dl = deq($3) }
+		$1 == "option" && $2 == "upload"    { ul = deq($3) }
+		END { if (have) print iface "\t" en "\t" dl "\t" ul }
 	' "$f"
 }
 
 do_sqm_interfaces() {
 	local sqm="${CAKE_AUTORATE_SQM_CONFIG:-/etc/config/sqm}"
-	local ifbs sections line iface en ifb present mismatch
+	local ifbs sections line rest iface en dl_raw ul_raw ifb present mismatch
 	local objs='' sep='' egress_list=''
 
 	ifbs=$(list_ifb_devices)
@@ -295,14 +324,22 @@ do_sqm_interfaces() {
 	IFS='
 '
 	for line in $sections; do
-		iface=${line%%	*}
-		en=${line#*	}
+		# Four TAB-separated fields, peeled off one at a time. Deliberately NOT
+		# `IFS=<TAB>; set -- $line`: TAB is IFS *white space*, so a run of tabs
+		# would collapse into one delimiter and an empty field (`option
+		# download ''`) would shift every field after it -- an upload rate
+		# would land in download_kbps.
+		rest="$line"
+		iface=${rest%%	*}; rest=${rest#*	}
+		en=${rest%%	*}; rest=${rest#*	}
+		dl_raw=${rest%%	*}; rest=${rest#*	}
+		ul_raw=${rest%%	*}
 		[ -n "$iface" ] || continue
 		ifb="ifb4$iface"
 		if printf '%s\n' "$ifbs" | grep -qx "$ifb"; then present=1; else present=0; fi
 		# mismatch: SQM says shape this egress but its ifb ingress isn't live.
 		if [ "$(json_bool "$en")" = true ] && [ "$present" = 0 ]; then mismatch=1; else mismatch=0; fi
-		objs="$objs$sep{\"egress\":\"$iface\",\"ingress_ifb\":\"$ifb\",\"sqm_enabled\":$(json_bool "$en"),\"ifb_present\":$(json_bool "$present"),\"mismatch\":$(json_bool "$mismatch")}"
+		objs="$objs$sep{\"egress\":\"$iface\",\"ingress_ifb\":\"$ifb\",\"sqm_enabled\":$(json_bool "$en"),\"ifb_present\":$(json_bool "$present"),\"mismatch\":$(json_bool "$mismatch"),\"download_kbps\":$(json_num "$dl_raw"),\"upload_kbps\":$(json_num "$ul_raw")}"
 		sep=','
 		egress_list="$egress_list$iface
 "
@@ -318,6 +355,342 @@ do_sqm_interfaces() {
 		"$(printf '%s' "$egress_list" | json_str_array)" \
 		"$(printf '%s\n' "$ifbs" | json_str_array)" \
 		"$(printf '%s\n' "$ifbs" | json_str_array)"
+}
+
+# --------------------------------------------------------------------------
+# rrdtool fetch sample extraction
+#
+# RRDtool on OpenWrt is 1.0.x: `rrdtool1` is the only rrdtool in the feed, and is
+# what luci-app-statistics -- a hard dependency of the LuCI app, so both it and
+# the per-instance RRDs are guaranteed present -- pulls in. That vintage has
+# `fetch` and does NOT have `xport`, which arrived in RRDtool 1.2. Every read of
+# a collectd RRD therefore goes through `rrdtool fetch <file> AVERAGE`. AVERAGE
+# is also the only consolidation function on offer: OpenWrt sets RRASingle '1',
+# so collectd builds AVERAGE-only RRAs with no MIN or MAX.
+#
+# 1.0.x's output formatting is the least certain assumption in this file, which
+# is why the parse is isolated here with its own fixtures
+# (tests/rpcd/fixtures/rrdtool-fetch-*.txt): if the on-device format differs,
+# only these functions and those files change.
+# --------------------------------------------------------------------------
+
+# rrd_fetch <rrd-file> [extra rrdtool args...]
+# stdout: raw `rrdtool fetch` output. Returns non-zero, printing nothing, when
+# the RRD or the rrdtool binary is missing -- the normal state of a fresh install
+# whose statistics have not accumulated yet, which callers degrade on rather than
+# treat as an error.
+rrd_fetch() {
+	local rrd="${CAKE_AUTORATE_RRDTOOL:-rrdtool}"
+	local file="${1:-}"
+
+	[ -n "$file" ] || return 1
+	shift
+	[ -f "$file" ] || return 1
+	command -v "$rrd" >/dev/null 2>&1 || return 1
+
+	"$rrd" fetch "$file" AVERAGE "$@" 2>/dev/null
+}
+
+# rrd_samples
+# stdin : `rrdtool fetch` output. stdout: one plain decimal number per valid
+# sample, in order. Parsed defensively rather than against one exact shape:
+#
+#   * the header line of DS names carries no colon, so keying on a
+#     ":"-terminated first field skips it without needing to know the DS name --
+#     and skips blank, whitespace-only and prose lines for free;
+#   * only the first data source ($2) is read; the cake-autorate RRDs are
+#     collectd `bitrate` files with a single DS;
+#   * a value is emitted only if it looks like a number, which rejects every nan
+#     spelling (nan / NaN / -nan), UNKN, U, a row with a timestamp but no value,
+#     and whatever else 1.0.x might print, without enumerating them;
+#   * `v + 0` performs the scientific-notation conversion (1.2345678900e+04 ->
+#     12345.6789) and "%.6f" prints it as a plain decimal usable in later
+#     arithmetic.
+#
+# Deliberately lossless -- a caller that wants integer Kbit/s rounds at the call
+# site.
+rrd_samples() {
+	awk '
+		$1 !~ /:$/ { next }
+		{
+			v = $2
+			if (v !~ /^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$/) next
+			printf "%.6f\n", v + 0
+		}
+	'
+}
+
+# rrd_sample_count
+# stdin: rrd_samples output. stdout: how many samples it produced, as a bare
+# number (0 on empty input), so a caller can refuse to draw a conclusion from too
+# few points. `wc -l` is avoided deliberately: it pads its output on some
+# implementations and undercounts a final line with no trailing newline.
+rrd_sample_count() {
+	awk 'END { print NR }'
+}
+
+# --------------------------------------------------------------------------
+# calibration -- is a configured bound, rather than the line, the limit?
+#
+# The daemon continuously moves the CAKE shaper rate between the instance's
+# configured min and max. A shaper that has been sitting AT one of those bounds
+# for most of the observed window is direct evidence that the bound, not the
+# line, is what is limiting it: the controller wanted to go further and could
+# not. Clipping is also the one signal that survives the statistics pipeline
+# intact -- the average of a clipped constant is that constant -- which is why
+# this reads the shaper rate and nothing else.
+#
+# DELIBERATELY NOT CONDITIONED ON THE LOAD GAUGE. It would be tempting to
+# qualify "floored at min" with "...during bufferbloat" by reading
+# gauge-{dl,ul}_load. Do not add that back. The load gauge is CATEGORICAL
+# (0=idle 1=low 2=high, +10 when bufferbloat is flagged) and OpenWrt sets
+# RRASingle '1', so collectd builds AVERAGE-only RRAs: the mean of 2 and 12 is
+# 7, which denotes nothing at all. A shaper resting at min is already sufficient
+# evidence on its own; the gauge would add only false precision.
+#
+# READ-ONLY. There is no apply path and no ACL write entry -- the verdict is a
+# recommendation the user acts on through the config form's existing Save.
+# --------------------------------------------------------------------------
+
+# The observation window, expressed twice because rrdtool takes an AT-style
+# offset and the JSON reports seconds. Seven days is the horizon over which
+# "your bound is wrong" is a claim worth making; RRD retention is usually
+# shorter (DataDir defaults to /tmp/rrd, i.e. since boot), which is exactly why
+# the sample count is reported alongside every verdict.
+CALIB_WINDOW_ARG='end-7d'
+CALIB_WINDOW_S=604800
+
+# How close to a bound counts as "at" it. The daemon clamps the shaper rate to
+# the bound, so a genuinely clipped sample IS the bound; the tolerance only has
+# to absorb RRD's consolidation of rows that straddle the moment the shaper left
+# it. 0.5% is half of the controller's own smallest step (the shipped
+# shaper_rate_adjust_up_load_low / shaper_rate_adjust_down_load_low are 1.01 /
+# 0.99, i.e. 1%), so a sample one full step away from the bound can never be
+# counted as clipped.
+CALIB_TOLERANCE_FRACTION=0.005
+
+# How much of the window must be spent at the bound. Nine tenths: high enough
+# that a shaper merely visiting the bound while probing upward does not trigger
+# it, low enough that a genuinely clipped shaper is not masked by the occasional
+# back-off row.
+CALIB_THRESHOLD_FRACTION=0.9
+
+# Below this many valid samples no verdict is drawn at all. rrdtool serves the
+# window from whichever RRA covers it, so a row is anywhere from one collectd
+# interval (30 s) to ~35 minutes wide; twelve rows is therefore between six
+# minutes and seven hours of link behaviour. Fewer than that and a single
+# transfer could account for every sample, and the verdict would describe the
+# transfer rather than the line.
+CALIB_MIN_SAMPLES=12
+
+# collectd's RRD root. luci-app-statistics keeps it in the `luci_statistics` UCI
+# config as the rrdtool plugin's DataDir; when that is unset collectd's OpenWrt
+# default is /tmp/rrd.
+calibration_data_dir() {
+	if [ -n "${CAKE_AUTORATE_RRD_DIR:-}" ]; then
+		printf '%s' "$CAKE_AUTORATE_RRD_DIR"
+		return 0
+	fi
+	local f="${CAKE_AUTORATE_STATISTICS_CONFIG:-/etc/config/luci_statistics}" dd=''
+	if [ -f "$f" ]; then
+		dd=$(awk '
+			function deq(s) { gsub(/["\047]/, "", s); return s }
+			$1 == "config" { sec = deq($3); next }
+			$1 == "option" && $2 == "DataDir" {
+				v = deq($3)
+				if (v == "") next
+				if (sec == "collectd_rrdtool") { print v; done = 1; exit }
+				if (first == "") first = v
+			}
+			END { if (!done && first != "") print first }
+		' "$f")
+	fi
+	printf '%s' "$dd"
+}
+
+# The RRD roots to search, most authoritative first, one per line.
+#
+# When luci_statistics names a DataDir that is the answer and the only candidate.
+# When it does not, guessing a single default is wrong: OpenWrt's shipped
+# luci_statistics sets /tmp/rrd, but collectd's own compiled-in default is
+# /var/lib/collectd/rrd, and that is what a box running collectd WITHOUT
+# luci-app-statistics' rrdtool config actually uses -- confirmed on the
+# integration VM, whose real RRDs live in /var/lib/collectd/rrd/<host>/. Probing
+# both matters because picking wrong is SILENT: the directory simply is not
+# there, the method reports no-rrd, and the feature looks like it has no data
+# rather than like it is looking in the wrong place.
+calibration_data_dir_candidates() {
+	local dd
+	dd=$(calibration_data_dir)
+	if [ -n "$dd" ]; then
+		printf '%s\n' "$dd"
+		return 0
+	fi
+	printf '%s\n' '/var/lib/collectd/rrd' '/tmp/rrd'
+}
+
+# calibration_instance_dir <instance>
+# The directory collectd writes this instance's RRDs into:
+#   <DataDir>/<host>/cake_autorate-<instance>
+# <host> is collectd's hostname, derived the way cake-autorate-collectd.sh
+# derives the one it labels its PUTVAL lines with. Always prints a well-formed
+# path -- the caller decides what a missing file means.
+calibration_instance_dir() {
+	local inst="$1" dd cand sys first='' only='' n=0 d roots
+
+	sys=$(cat /proc/sys/kernel/hostname 2>/dev/null || hostname 2>/dev/null || true)
+	roots=$(calibration_data_dir_candidates)
+
+	# Pass 1: an exact host directory under any candidate root wins outright.
+	for dd in $roots; do
+		for cand in "${COLLECTD_HOSTNAME:-}" "$sys"; do
+			[ -n "$cand" ] || continue
+			[ -n "$first" ] || first="$cand"
+			[ -d "$dd/$cand/cake_autorate-$inst" ] || continue
+			printf '%s' "$dd/$cand/cake_autorate-$inst"
+			return 0
+		done
+	done
+
+	# Pass 2: collectd may have used an FQDN, or a Hostname set in its own
+	# config, that we cannot reconstruct here. When a candidate root holds
+	# exactly one host directory there is no ambiguity about which one it is.
+	for dd in $roots; do
+		n=0; only=''
+		for d in "$dd"/*; do
+			[ -d "$d" ] || continue
+			n=$((n + 1))
+			only="$d"
+		done
+		if [ "$n" = 1 ] && [ -d "$only/cake_autorate-$inst" ]; then
+			printf '%s' "$only/cake_autorate-$inst"
+			return 0
+		fi
+	done
+
+	# Nothing matched. Report the most plausible path so the no-rrd reason names
+	# somewhere a human can go and look.
+	set -- $roots
+	printf '%s' "${1}/${first:-localhost}/cake_autorate-$inst"
+}
+
+# calibration_bounds <instance>
+# stdout: "min_dl<TAB>max_dl<TAB>min_ul<TAB>max_ul" for that instance's UCI
+# section, or nothing when the section does not exist. A field is empty when the
+# section omits that option (legal -- an omitted option keeps the daemon's own
+# default, which is not knowable from here); the caller normalises to 0.
+#
+# The config file is parsed directly rather than through libuci, exactly as
+# parse_sqm_sections() reads /etc/config/sqm: it keeps the whole backend
+# testable off-device with no uci binary and no /lib/functions.sh, and the
+# committed file is the right source anyway -- it is what the bridge generated
+# the RUNNING daemon config from, so it is the bound the samples were actually
+# produced under.
+calibration_bounds() {
+	local inst="$1"
+	local f="${CAKE_AUTORATE_UCI_CONFIG:-/etc/config/cake-autorate}"
+	[ -f "$f" ] || return 0
+	awk -v want="$inst" '
+		function deq(s) { gsub(/["\047]/, "", s); return s }
+		$1 == "config" {
+			insec = (deq($2) == "cake-autorate" && deq($3) == want)
+			if (insec) seen = 1
+			next
+		}
+		insec && $1 == "option" && $2 == "min_dl_shaper_rate_kbps" { mindl = deq($3) }
+		insec && $1 == "option" && $2 == "max_dl_shaper_rate_kbps" { maxdl = deq($3) }
+		insec && $1 == "option" && $2 == "min_ul_shaper_rate_kbps" { minul = deq($3) }
+		insec && $1 == "option" && $2 == "max_ul_shaper_rate_kbps" { maxul = deq($3) }
+		END { if (seen) print mindl "\t" maxdl "\t" minul "\t" maxul }
+	' "$f"
+}
+
+# calibration_direction_json <configured_min> <configured_max>
+# stdin : one plain decimal sample per line (rrd_samples output).
+# stdout: the per-direction JSON object, braces included. Never fails: with no
+# samples it still emits the full key set, with verdict "insufficient-data".
+calibration_direction_json() {
+	awk -v cmin="$1" -v cmax="$2" \
+		-v tol="$CALIB_TOLERANCE_FRACTION" \
+		-v thr="$CALIB_THRESHOLD_FRACTION" \
+		-v need="$CALIB_MIN_SAMPLES" '
+		function ab(x) { return x < 0 ? -x : x }
+		BEGIN { cmin += 0; cmax += 0; tol += 0; thr += 0; need += 0 }
+		NF == 0 { next }
+		{
+			v = $1 + 0
+			n++
+			# A bound of 0 means "not configured in UCI" -- there is nothing to
+			# be clipped against, so it can never contribute a hit.
+			if (cmax > 0 && ab(v - cmax) <= cmax * tol) p++
+			if (cmin > 0 && ab(v - cmin) <= cmin * tol) f++
+		}
+		END {
+			pf = (n > 0) ? p / n : 0
+			ff = (n > 0) ? f / n : 0
+			if (n < need)                    verdict = "insufficient-data"
+			else if (cmax <= 0 && cmin <= 0) verdict = "insufficient-data"
+			else if (cmax > 0 && pf >= thr)  verdict = "pinned-max"
+			else if (cmin > 0 && ff >= thr)  verdict = "floored-min"
+			else                             verdict = "ok"
+			printf "{\"samples\":%d,\"pinned_max_fraction\":%.4f,\"floored_min_fraction\":%.4f,\"verdict\":\"%s\",\"configured_min\":%d,\"configured_max\":%d}", \
+				n, pf, ff, verdict, cmin, cmax
+		}
+	'
+}
+
+do_calibration() {
+	local inst="$1"
+	valid_instance "$inst" || { err_json "invalid instance name"; return "$US_INVALID_ARGUMENT"; }
+
+	local rrdbin dir dl_rrd ul_rrd
+	rrdbin="${CAKE_AUTORATE_RRDTOOL:-rrdtool}"
+	# Every one of the three states below is NORMAL on a fresh install, not a
+	# fault, so they degrade the same way status does rather than erroring.
+	if ! command -v "$rrdbin" >/dev/null 2>&1; then
+		printf '{"available":false,"reason":"no-rrdtool","instance":"%s"}\n' "$inst"
+		return 0
+	fi
+
+	dir=$(calibration_instance_dir "$inst")
+	dl_rrd="$dir/bitrate-dl_shaper.rrd"
+	ul_rrd="$dir/bitrate-ul_shaper.rrd"
+	if [ ! -f "$dl_rrd" ] && [ ! -f "$ul_rrd" ]; then
+		printf '{"available":false,"reason":"no-rrd","instance":"%s"}\n' "$inst"
+		return 0
+	fi
+
+	local raw rest min_dl max_dl min_ul max_ul
+	raw=$(calibration_bounds "$inst")
+	# Peel the four TAB-separated fields off one at a time rather than resetting
+	# IFS: TAB is IFS white space, so an empty field (an option the section
+	# omits) would collapse and shift every field after it.
+	rest="$raw"
+	min_dl=${rest%%	*}; rest=${rest#*	}
+	max_dl=${rest%%	*}; rest=${rest#*	}
+	min_ul=${rest%%	*}; rest=${rest#*	}
+	max_ul=${rest%%	*}
+	# json_num normalises anything that is not a plain non-negative integer to 0,
+	# which is also this method's "not configured" sentinel -- so the arithmetic
+	# and the emitted JSON can never disagree.
+	min_dl=$(json_num "$min_dl"); max_dl=$(json_num "$max_dl")
+	min_ul=$(json_num "$min_ul"); max_ul=$(json_num "$max_ul")
+
+	local dl_samples ul_samples dl_n ul_n
+	dl_samples=$(rrd_fetch "$dl_rrd" --start "$CALIB_WINDOW_ARG" | rrd_samples)
+	ul_samples=$(rrd_fetch "$ul_rrd" --start "$CALIB_WINDOW_ARG" | rrd_samples)
+	dl_n=$(printf '%s' "$dl_samples" | rrd_sample_count)
+	ul_n=$(printf '%s' "$ul_samples" | rrd_sample_count)
+	if [ "$dl_n" = 0 ] && [ "$ul_n" = 0 ]; then
+		printf '{"available":false,"reason":"no-data","instance":"%s"}\n' "$inst"
+		return 0
+	fi
+
+	printf '{"available":true,"instance":"%s","window_s":%s,"min_samples":%s,"tolerance_fraction":%s,"threshold_fraction":%s,"dl":%s,"ul":%s}\n' \
+		"$inst" "$CALIB_WINDOW_S" "$CALIB_MIN_SAMPLES" \
+		"$CALIB_TOLERANCE_FRACTION" "$CALIB_THRESHOLD_FRACTION" \
+		"$(printf '%s' "$dl_samples" | calibration_direction_json "$min_dl" "$max_dl")" \
+		"$(printf '%s' "$ul_samples" | calibration_direction_json "$min_ul" "$max_ul")"
 }
 
 # --------------------------------------------------------------------------
@@ -360,6 +733,7 @@ cmd_list() {
 	{
 		"sqm_interfaces": {},
 		"status": { "instance": "" },
+		"calibration": { "instance": "" },
 		"service": { "action": "", "instance": "" }
 	}
 	EOF
@@ -378,6 +752,10 @@ cmd_call() {
 		status)
 			instance=$(printf '%s' "$REQ" | json_field instance)
 			do_status "$instance" || exit $?
+			;;
+		calibration)
+			instance=$(printf '%s' "$REQ" | json_field instance)
+			do_calibration "$instance" || exit $?
 			;;
 		service)
 			action=$(printf '%s' "$REQ" | json_field action)
