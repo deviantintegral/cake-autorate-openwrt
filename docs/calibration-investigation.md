@@ -8,7 +8,8 @@ test, latency, jitter — and then recommends or sets cake-autorate's settings?
 Short answer: **yes, there is a real problem worth solving, but a speed test is
 the weakest of the three available instruments and should be the last thing
 built, not the first.** The package already collects better data than a speed
-test can produce, and already throws it away.
+test can produce — and then decimates most of it away before it reaches the
+statistics feed (§3.1).
 
 ---
 
@@ -119,15 +120,66 @@ recommend settings" feature is a direct replacement for a workflow upstream
 already endorses but makes painful. That is a much stronger position than
 inventing a measurement methodology from scratch.
 
-**Honest caveat.** The log retains ~10 minutes plus one rotation by default
-(`log_file_max_time_mins 10`, `log_file_max_size_KB 2000`), and the collectd
-RRDs default to `/tmp` on OpenWrt, so they are since-boot unless the user moved
-rrd storage to persistent media. A useful analyser therefore has to accumulate
-its own small rolling digest rather than assume days of history are on disk.
-
 **The structural limit of passive observation:** it only ever sees rates your
 own traffic demanded. If the link is never saturated, `max` is a lower bound and
 must be reported as one. That — and only that — is the gap an active test fills.
+
+### 3.1 Use the statistics feed we already ship
+
+The raw log retains only ~10 minutes plus one rotation
+(`log_file_max_time_mins 10`, `log_file_max_size_KB 2000`), so it cannot be the
+history source on its own. But the retained history already exists: the collectd
+exec reader feeds RRDs, and **`luci-app-cake-autorate` already hard-depends on
+`luci-app-statistics`** (`LUCI_DEPENDS`), which pulls `collectd-mod-rrdtool` and
+`rrdtool1`. Wherever the UI is installed, the per-instance RRDs *and* the
+`rrdtool` binary to read them back are guaranteed present. A stats-driven
+calibrator needs **no new dependency** — which makes it markedly cheaper than
+accumulating a bespoke digest of our own.
+
+The catch is that the data is decimated twice before it lands:
+
+1. **Our reader keeps one sample per interval.** `cake-autorate-collectd.sh`
+   takes `tail -n 1000 | grep '^SUMMARY; ' | tail -n 1` — a single
+   *instantaneous* sample per 30 s tick, out of a stream emitting many per
+   second. Correct for a status-graph feed; lossy for statistics.
+2. **OpenWrt sets `RRASingle '1'`** in `luci_statistics`, so collectd creates
+   **AVERAGE-only RRAs — no MIN, no MAX**. With `RRARows 288` over
+   `2hour 1day 1week 1month 1year`, 1-week rows average ~35 minutes each and
+   1-year rows ~30 hours.
+
+What survives, per parameter:
+
+| Signal | Survives decimation? |
+| --- | --- |
+| Peak achieved rate (→ `max`) | Poorly — spot-sampled, then averaged. Only the 2-hour RRA (~25 s/row) is near-raw. |
+| Bufferbloat events (→ `min`) | No. `_bb` is transient and rarely sampled; and averaging a categorical gauge (0/1/2/10/11/12) is meaningless — the mean of 2 and 12 is 7, which denotes nothing. |
+| **Shaper rate** | **Yes.** A slow-moving state variable: spot sampling represents it fairly and averaging it is meaningful. |
+
+**So calibrate off the shaper rate, not off throughput.** `min`/`base`/`max` are
+bounds on a quantity the daemon already estimates continuously — the analyser is
+not measuring the line, it is reading back the controller's own standing opinion
+of it, which is what a speed test was a crude proxy for in the first place.
+
+**Clipping is the highest-confidence signal and needs no changes at all.** If
+the shaper sits pinned at the configured `max` for long stretches, `max` is too
+low; if it is floored at `min` while bufferbloat is being flagged, `min` is too
+high. Clipping survives every layer of averaging — the average of a clipped
+constant is that constant.
+
+To go beyond clipping, fix the decimation at the source rather than working
+around it: have the exec reader aggregate over *all* `SUMMARY` lines since the
+last tick instead of `tail -1`, emitting per-interval max achieved rate, min
+shaper rate, a bufferbloat-event count and a high percentile of OWD delta as
+additional metrics. AVERAGE-only RRAs then become calibration-grade, because
+what is averaged is per-interval maxima rather than smeared spot samples. The
+change is additive — new DS names create new RRD files and existing graphs are
+untouched — but it costs reader CPU (it runs as `nobody` on possibly low-power
+hardware) and it moves the collectd field contract, so both parsers have to
+change in lockstep.
+
+**Retention caveat.** `DataDir` defaults to `/tmp/rrd`, so history is since-boot
+unless the user has moved `rrd_storage_path` to persistent storage. The feature
+must report the window it actually has data for rather than assume a year of it.
 
 ## 4. The cheapest win is neither of those
 
@@ -149,14 +201,28 @@ add a "seed rates from SQM" action to the Essentials tab for an unconfigured
 instance; add a short "how to pick these six numbers" section to
 `docs/configuration.md`. Removes most of the cliff for near-zero cost and risk.
 
-**Stage 2 — passive calibration from our own log (the actual feature).**
-A Calibration view that observes the `SUMMARY` stream over a user-chosen window,
-keeps a small persistent digest, and then *recommends* `min`/`base`/`max` **and
-the OWD delta thresholds**, with an explicit Apply step and a stated confidence
-("the link was never saturated during this window, so max is a lower bound").
+**Stage 2 — recommendations from the statistics we already collect (the actual
+feature).** A Calibration view that reads the per-instance RRDs with the
+`rrdtool` binary `luci-app-statistics` already brings, and *recommends*
+`min`/`base`/`max` **and the OWD delta thresholds**, with an explicit Apply step
+and a stated confidence and window ("based on 4 days of history; the link was
+never saturated in it, so max is a lower bound"). Build it in two steps:
+
+- **2a — clipping diagnosis.** Works against today's RRDs unmodified: report
+  when the shaper is pinned at the configured `max`, or floored at `min` while
+  bufferbloat is flagged, and recommend the bound that is wrong. Highest
+  confidence per unit of work on this page, and it survives the AVERAGE-only
+  consolidation intact (§3.1).
+- **2b — distribution-based values.** Requires the exec reader to emit
+  per-interval aggregates instead of one spot sample (§3.1) so the RRDs become
+  calibration-grade. Then derive `base`/`max` from the shaper-rate distribution,
+  `min` from how far bufferbloat actually drove it down, and the delay
+  thresholds from the idle OWD-delta noise floor.
+
 This is the differentiated feature: it is the only one of the three that can
-tune the delay thresholds, it costs no data, it needs no new dependency, and it
-reuses an interface AGENTS.md already declares canonical.
+tune the delay thresholds, it costs no data and no new dependency, and it reuses
+both the log-stream interface AGENTS.md declares canonical and the stats
+pipeline built on top of it.
 
 **Stage 3 — active test, optional, only if still wanted.**
 Runtime-detected optional dependency, never a hard one. Explicit data-cost
@@ -182,6 +248,11 @@ cake-autorate rather than to the test.
 - **Invariant 2 stands.** Read the log stream; do not invent a daemon status
   file. A calibration report is our artifact, not a daemon status surface, and
   should not be confusable with one.
+- **The collectd field contract is shared.** The rpcd status method and the
+  exec reader parse the same 13-field `SUMMARY` line. Enriching the reader with
+  per-interval aggregates (§3.1) moves that contract, so both parsers and
+  `tests/statistics/test-collectd-parser.sh` change together. Keep new metrics
+  additive — new DS names, so existing RRDs and graphs keep working.
 - **SQM owns the qdisc.** Anything that changes shaping during a measurement
   goes through SQM's config, not `tc`.
 - **Both packages are noarch.** Keep it that way; no hard dependency on an
