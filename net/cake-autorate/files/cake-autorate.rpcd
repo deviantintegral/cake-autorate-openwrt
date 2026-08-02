@@ -17,7 +17,8 @@
 #                             ifb4<iface> ingress devices SQM created. Returns
 #                             validated choices for the LuCI UI: ul_if <-
 #                             egress_choices, dl_if <- ingress_choices, plus a
-#                             per-interface mismatch flag.
+#                             per-interface mismatch flag and SQM's configured
+#                             download_kbps/upload_kbps for that interface.
 #   status {instance?}        Per-instance live status parsed from the daemon log
 #                             /var/log/cake-autorate.<instance>.log. Uses the
 #                             same 13-field SUMMARY layout as the collectd exec
@@ -43,6 +44,7 @@
 #     CAKE_AUTORATE_NET_DIR    (default /sys/class/net)
 #     CAKE_AUTORATE_INSTANCES  (default: enabled UCI sections via libuci)
 #     CAKE_AUTORATE_INIT       (default /etc/init.d/cake-autorate)
+#     CAKE_AUTORATE_RRDTOOL    (default rrdtool, resolved on PATH)
 
 set -u
 
@@ -79,6 +81,18 @@ valid_action() {
 # emitted as an escaped JSON string.
 # --------------------------------------------------------------------------
 json_bool() { case "$1" in 1 | true | yes | on) printf 'true' ;; *) printf 'false' ;; esac; }
+
+# Emit $1 as a bare JSON number. SQM rates are non-negative integers in Kbit/s,
+# so anything else -- empty, "auto", a unit suffix, a sign, a decimal point, or a
+# leading zero (which JSON does not permit) -- degrades to 0, the same value
+# sqm-scripts uses to mean "no limit". Never emits a malformed number: a bad
+# rate must not break every consumer of this object.
+json_num() {
+	case "$1" in
+		'' | *[!0-9]* | 0?*) printf '0' ;;
+		*) printf '%s' "$1" ;;
+	esac
+}
 
 # Read newline-separated tokens on stdin, print a JSON array of strings.
 json_str_array() {
@@ -262,26 +276,31 @@ list_ifb_devices() {
 	done | sort
 }
 
-# Parse /etc/config/sqm into "iface<TAB>enabled" lines, one per section that
-# declares an `option interface`. enabled defaults to 1 when the key is absent.
+# Parse /etc/config/sqm into "iface<TAB>enabled<TAB>download<TAB>upload" lines,
+# one per section that declares an `option interface`. enabled defaults to 1 when
+# the key is absent. sqm-scripts stores both rates in Kbit/s -- already
+# cake-autorate's unit, so they are passed through unconverted; they default to
+# 0, sqm-scripts' "no limit" sentinel, which carries no rate to seed from.
 parse_sqm_sections() {
 	local f="${1:-${CAKE_AUTORATE_SQM_CONFIG:-/etc/config/sqm}}"
 	[ -f "$f" ] || return 0
 	awk '
 		function deq(s) { gsub(/["\047]/, "", s); return s }   # \047 == single quote
 		$1 == "config" {
-			if (have) print iface "\t" en
-			iface = ""; en = "1"; have = 0; next
+			if (have) print iface "\t" en "\t" dl "\t" ul
+			iface = ""; en = "1"; dl = "0"; ul = "0"; have = 0; next
 		}
 		$1 == "option" && $2 == "interface" { iface = deq($3); have = 1 }
 		$1 == "option" && $2 == "enabled"   { en = deq($3) }
-		END { if (have) print iface "\t" en }
+		$1 == "option" && $2 == "download"  { dl = deq($3) }
+		$1 == "option" && $2 == "upload"    { ul = deq($3) }
+		END { if (have) print iface "\t" en "\t" dl "\t" ul }
 	' "$f"
 }
 
 do_sqm_interfaces() {
 	local sqm="${CAKE_AUTORATE_SQM_CONFIG:-/etc/config/sqm}"
-	local ifbs sections line iface en ifb present mismatch
+	local ifbs sections line rest iface en dl_raw ul_raw ifb present mismatch
 	local objs='' sep='' egress_list=''
 
 	ifbs=$(list_ifb_devices)
@@ -295,14 +314,22 @@ do_sqm_interfaces() {
 	IFS='
 '
 	for line in $sections; do
-		iface=${line%%	*}
-		en=${line#*	}
+		# Four TAB-separated fields, peeled off one at a time. Deliberately NOT
+		# `IFS=<TAB>; set -- $line`: TAB is IFS *white space*, so a run of tabs
+		# would collapse into one delimiter and an empty field (`option
+		# download ''`) would shift every field after it -- an upload rate
+		# would land in download_kbps.
+		rest="$line"
+		iface=${rest%%	*}; rest=${rest#*	}
+		en=${rest%%	*}; rest=${rest#*	}
+		dl_raw=${rest%%	*}; rest=${rest#*	}
+		ul_raw=${rest%%	*}
 		[ -n "$iface" ] || continue
 		ifb="ifb4$iface"
 		if printf '%s\n' "$ifbs" | grep -qx "$ifb"; then present=1; else present=0; fi
 		# mismatch: SQM says shape this egress but its ifb ingress isn't live.
 		if [ "$(json_bool "$en")" = true ] && [ "$present" = 0 ]; then mismatch=1; else mismatch=0; fi
-		objs="$objs$sep{\"egress\":\"$iface\",\"ingress_ifb\":\"$ifb\",\"sqm_enabled\":$(json_bool "$en"),\"ifb_present\":$(json_bool "$present"),\"mismatch\":$(json_bool "$mismatch")}"
+		objs="$objs$sep{\"egress\":\"$iface\",\"ingress_ifb\":\"$ifb\",\"sqm_enabled\":$(json_bool "$en"),\"ifb_present\":$(json_bool "$present"),\"mismatch\":$(json_bool "$mismatch"),\"download_kbps\":$(json_num "$dl_raw"),\"upload_kbps\":$(json_num "$ul_raw")}"
 		sep=','
 		egress_list="$egress_list$iface
 "
@@ -318,6 +345,78 @@ do_sqm_interfaces() {
 		"$(printf '%s' "$egress_list" | json_str_array)" \
 		"$(printf '%s\n' "$ifbs" | json_str_array)" \
 		"$(printf '%s\n' "$ifbs" | json_str_array)"
+}
+
+# --------------------------------------------------------------------------
+# rrdtool fetch sample extraction
+#
+# RRDtool on OpenWrt is 1.0.x: `rrdtool1` is the only rrdtool in the feed, and is
+# what luci-app-statistics -- a hard dependency of the LuCI app, so both it and
+# the per-instance RRDs are guaranteed present -- pulls in. That vintage has
+# `fetch` and does NOT have `xport`, which arrived in RRDtool 1.2. Every read of
+# a collectd RRD therefore goes through `rrdtool fetch <file> AVERAGE`. AVERAGE
+# is also the only consolidation function on offer: OpenWrt sets RRASingle '1',
+# so collectd builds AVERAGE-only RRAs with no MIN or MAX.
+#
+# 1.0.x's output formatting is the least certain assumption in this file, which
+# is why the parse is isolated here with its own fixtures
+# (tests/rpcd/fixtures/rrdtool-fetch-*.txt): if the on-device format differs,
+# only these functions and those files change.
+# --------------------------------------------------------------------------
+
+# rrd_fetch <rrd-file> [extra rrdtool args...]
+# stdout: raw `rrdtool fetch` output. Returns non-zero, printing nothing, when
+# the RRD or the rrdtool binary is missing -- the normal state of a fresh install
+# whose statistics have not accumulated yet, which callers degrade on rather than
+# treat as an error.
+rrd_fetch() {
+	local rrd="${CAKE_AUTORATE_RRDTOOL:-rrdtool}"
+	local file="${1:-}"
+
+	[ -n "$file" ] || return 1
+	shift
+	[ -f "$file" ] || return 1
+	command -v "$rrd" >/dev/null 2>&1 || return 1
+
+	"$rrd" fetch "$file" AVERAGE "$@" 2>/dev/null
+}
+
+# rrd_samples
+# stdin : `rrdtool fetch` output. stdout: one plain decimal number per valid
+# sample, in order. Parsed defensively rather than against one exact shape:
+#
+#   * the header line of DS names carries no colon, so keying on a
+#     ":"-terminated first field skips it without needing to know the DS name --
+#     and skips blank, whitespace-only and prose lines for free;
+#   * only the first data source ($2) is read; the cake-autorate RRDs are
+#     collectd `bitrate` files with a single DS;
+#   * a value is emitted only if it looks like a number, which rejects every nan
+#     spelling (nan / NaN / -nan), UNKN, U, a row with a timestamp but no value,
+#     and whatever else 1.0.x might print, without enumerating them;
+#   * `v + 0` performs the scientific-notation conversion (1.2345678900e+04 ->
+#     12345.6789) and "%.6f" prints it as a plain decimal usable in later
+#     arithmetic.
+#
+# Deliberately lossless -- a caller that wants integer Kbit/s rounds at the call
+# site.
+rrd_samples() {
+	awk '
+		$1 !~ /:$/ { next }
+		{
+			v = $2
+			if (v !~ /^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$/) next
+			printf "%.6f\n", v + 0
+		}
+	'
+}
+
+# rrd_sample_count
+# stdin: rrd_samples output. stdout: how many samples it produced, as a bare
+# number (0 on empty input), so a caller can refuse to draw a conclusion from too
+# few points. `wc -l` is avoided deliberately: it pads its output on some
+# implementations and undercounts a final line with no trailing newline.
+rrd_sample_count() {
+	awk 'END { print NR }'
 }
 
 # --------------------------------------------------------------------------

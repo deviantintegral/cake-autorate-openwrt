@@ -211,6 +211,104 @@ ij0=$(CAKE_AUTORATE_SQM_CONFIG="$tmp/nosuchsqm" CAKE_AUTORATE_NET_DIR="$netd" do
 [ "$(printf '%s' "$ij0" | jq -r '.sqm_config_present')" = false ] \
 	&& ok "missing /etc/config/sqm -> sqm_config_present == false" || fail "missing sqm not handled: $ij0"
 
+# the fixture above declares no rates at all -> both rates report 0, not null
+[ "$(printf '%s' "$ij" | jq -r '.interfaces[] | select(.egress=="eth1") | .download_kbps')" = 0 ] \
+	&& ok "section with no download/upload option -> download_kbps == 0" || fail "rate-less download_kbps wrong: $e1"
+[ "$(printf '%s' "$ij" | jq -r '.interfaces[] | select(.egress=="eth1") | .upload_kbps')" = 0 ] \
+	&& ok "section with no download/upload option -> upload_kbps == 0" || fail "rate-less upload_kbps wrong: $e1"
+
+# ==========================================================================
+echo
+echo "== 4b. sqm_interfaces: SQM's configured download/upload rates (Kbit/s)"
+# sqm-scripts stores both rates in Kbit/s -- cake-autorate's own unit, so the
+# backend passes them through untouched. '0' is sqm-scripts' "no limit"
+# sentinel and a non-numeric value carries no rate; both must surface as 0 so
+# the JSON stays a bare number for every consumer.
+cat > "$tmp/sqm-rates" <<'EOF'
+config queue 'wan'
+	option interface 'eth1'
+	option enabled '1'
+	option download '90000'
+	option upload '11000'
+	option qdisc 'cake'
+
+config queue 'zero'
+	option interface 'eth2'
+	option enabled '1'
+	option download '0'
+	option upload '4500'
+
+config queue 'bare'
+	option interface 'eth3'
+	option enabled '1'
+
+config queue 'nonnum'
+	option interface 'eth4'
+	option enabled '1'
+	option download 'auto'
+	option upload '12mbit'
+
+config queue 'leadingzero'
+	option interface 'eth5'
+	option enabled '1'
+	option download '0090000'
+	option upload '-5000'
+EOF
+
+ir=$(CAKE_AUTORATE_SQM_CONFIG="$tmp/sqm-rates" CAKE_AUTORATE_NET_DIR="$netd" do_sqm_interfaces)
+printf '%s' "$ir" | jq -e . >/dev/null 2>&1 \
+	&& ok "sqm_interfaces with rates is valid JSON" || { fail "rates output not valid JSON: $ir"; }
+
+# both rates set -> passed through verbatim, as JSON numbers
+r1=$(printf '%s' "$ir" | jq -c '.interfaces[] | select(.egress=="eth1")')
+[ "$(printf '%s' "$ir" | jq -r '.interfaces[0].download_kbps')" = 90000 ] \
+	&& ok "interfaces[0].download_kbps == 90000" || fail "download_kbps wrong: $r1"
+[ "$(printf '%s' "$ir" | jq -r '.interfaces[0].upload_kbps')" = 11000 ] \
+	&& ok "interfaces[0].upload_kbps == 11000" || fail "upload_kbps wrong: $r1"
+[ "$(printf '%s' "$r1" | jq -r '.download_kbps | type')" = number ] \
+	&& ok "download_kbps is a JSON number, not a string" || fail "download_kbps not a JSON number: $r1"
+[ "$(printf '%s' "$r1" | jq -r '.upload_kbps | type')" = number ] \
+	&& ok "upload_kbps is a JSON number, not a string" || fail "upload_kbps not a JSON number: $r1"
+
+# the four-field split must not disturb the fields that were already there
+[ "$(printf '%s' "$r1" | jq -r '.ingress_ifb')" = ifb4eth1 ] \
+	&& ok "rates present: eth1 still pairs with ifb4eth1" || fail "eth1 ingress_ifb wrong with rates: $r1"
+[ "$(printf '%s' "$r1" | jq -r '.sqm_enabled')" = true ] \
+	&& ok "rates present: eth1 sqm_enabled still true" || fail "eth1 sqm_enabled wrong with rates: $r1"
+[ "$(printf '%s' "$r1" | jq -r '.mismatch')" = false ] \
+	&& ok "rates present: eth1 mismatch still false" || fail "eth1 mismatch wrong with rates: $r1"
+
+# download '0' (sqm-scripts' no-limit sentinel) -> 0, and the sibling rate survives
+r2=$(printf '%s' "$ir" | jq -c '.interfaces[] | select(.egress=="eth2")')
+[ "$(printf '%s' "$r2" | jq -r '.download_kbps')" = 0 ] \
+	&& ok "download '0' -> download_kbps == 0" || fail "zero download wrong: $r2"
+[ "$(printf '%s' "$r2" | jq -r '.upload_kbps')" = 4500 ] \
+	&& ok "download '0' does not clobber upload_kbps (4500)" || fail "sibling upload wrong: $r2"
+[ "$(printf '%s' "$r2" | jq -r '.mismatch')" = true ] \
+	&& ok "rates present: eth2 mismatch still true (no ifb4eth2)" || fail "eth2 mismatch wrong with rates: $r2"
+
+# neither option present -> both 0 (defaults must not leak from the section above)
+r3=$(printf '%s' "$ir" | jq -c '.interfaces[] | select(.egress=="eth3")')
+[ "$(printf '%s' "$r3" | jq -r '.download_kbps')" = 0 ] \
+	&& ok "no download option -> download_kbps == 0" || fail "missing download wrong: $r3"
+[ "$(printf '%s' "$r3" | jq -r '.upload_kbps')" = 0 ] \
+	&& ok "no upload option -> upload_kbps == 0" || fail "missing upload wrong: $r3"
+
+# a non-numeric rate must degrade to 0 rather than emit invalid JSON
+r4=$(printf '%s' "$ir" | jq -c '.interfaces[] | select(.egress=="eth4")')
+[ "$(printf '%s' "$r4" | jq -r '.download_kbps')" = 0 ] \
+	&& ok "non-numeric download ('auto') -> 0" || fail "non-numeric download wrong: $r4"
+[ "$(printf '%s' "$r4" | jq -r '.upload_kbps')" = 0 ] \
+	&& ok "non-numeric upload ('12mbit') -> 0" || fail "non-numeric upload wrong: $r4"
+
+# JSON forbids a leading zero and a rate cannot be negative -- emitting either
+# verbatim would make the whole object unparseable for every consumer.
+r5=$(printf '%s' "$ir" | jq -c '.interfaces[] | select(.egress=="eth5")')
+[ "$(printf '%s' "$r5" | jq -r '.download_kbps')" = 0 ] \
+	&& ok "leading-zero download ('0090000') -> 0, never an invalid JSON number" || fail "leading-zero download wrong: $r5"
+[ "$(printf '%s' "$r5" | jq -r '.upload_kbps')" = 0 ] \
+	&& ok "negative upload ('-5000') -> 0" || fail "negative upload wrong: $r5"
+
 # ==========================================================================
 echo
 echo "== 5. validators: reject path traversal / command injection / bad action"
@@ -277,6 +375,138 @@ grep -qx 'restart primary' "$marker" && ok "init.d invoked as 'cake-autorate res
 : > "$marker"
 do_service reload '' >/dev/null 2>&1
 grep -qx 'reload' "$marker" && ok "init.d invoked as 'cake-autorate reload' (no instance)" || fail "whole-service call wrong: $(cat "$marker")"
+
+# ==========================================================================
+echo
+echo "== 7. rrdtool fetch parser: valid samples only, from RRDtool 1.0.x output"
+# RRDtool on OpenWrt is 1.0.x (`rrdtool1` is the only rrdtool in the feed, and is
+# what luci-app-statistics depends on). `fetch` is its only export verb --
+# `xport` arrived in RRDtool 1.2 -- and its `fetch` output is a header line of DS
+# names, a blank line, then "<timestamp>: <value>" rows whose value formatting and
+# NaN spelling are of their era. The three fixtures capture that shape; if the
+# real on-device format ever differs, only rrd_samples and those files change.
+FIXD="$root/tests/rpcd/fixtures"
+
+# -- the normal run: exact values, so a mis-parsed exponent cannot pass as
+#    "some number" ------------------------------------------------------------
+rrd_samples < "$FIXD/rrdtool-fetch-normal.txt" > "$tmp/samples-normal"
+want='12345.678900
+12000.000000
+11980.000000
+9900.000000
+45000.000000'
+[ "$(cat "$tmp/samples-normal")" = "$want" ] \
+	&& ok "normal fixture -> exactly the 5 valid samples, exponents expanded" \
+	|| fail "normal fixture parsed wrong: $(cat "$tmp/samples-normal")"
+[ "$(rrd_sample_count < "$tmp/samples-normal")" = 5 ] \
+	&& ok "normal fixture -> reported sample count 5 (3 nan rows dropped)" \
+	|| fail "normal count wrong: $(rrd_sample_count < "$tmp/samples-normal")"
+# 1.2345678900e+04 must become 12345.6789, not 1.234568 or 1
+head -n1 "$tmp/samples-normal" | grep -qx '12345.678900' \
+	&& ok "scientific notation 1.2345678900e+04 -> plain 12345.678900" \
+	|| fail "exponent conversion wrong: $(head -n1 "$tmp/samples-normal")"
+# the header line carries no colon and must never reach the output
+grep -q 'value' "$tmp/samples-normal" \
+	&& fail "header line leaked into the sample stream" \
+	|| ok "header line ('value', no colon) skipped"
+
+# -- the all-nan run: zero lines out, count 0 ---------------------------------
+rrd_samples < "$FIXD/rrdtool-fetch-all-nan.txt" > "$tmp/samples-nan"
+[ ! -s "$tmp/samples-nan" ] \
+	&& ok "all-nan fixture -> zero output lines" \
+	|| fail "all-nan fixture emitted output: $(cat "$tmp/samples-nan")"
+[ "$(rrd_sample_count < "$tmp/samples-nan")" = 0 ] \
+	&& ok "all-nan fixture -> reported count 0 (nan/-nan/NaN all dropped)" \
+	|| fail "all-nan count wrong: $(rrd_sample_count < "$tmp/samples-nan")"
+
+# -- the empty/near-empty run: header only ------------------------------------
+rrd_samples < "$FIXD/rrdtool-fetch-empty.txt" > "$tmp/samples-empty"
+[ ! -s "$tmp/samples-empty" ] \
+	&& ok "header-only fixture -> zero output lines" \
+	|| fail "header-only fixture emitted output: $(cat "$tmp/samples-empty")"
+[ "$(rrd_sample_count < "$tmp/samples-empty")" = 0 ] \
+	&& ok "header-only fixture -> reported count 0" \
+	|| fail "header-only count wrong: $(rrd_sample_count < "$tmp/samples-empty")"
+[ "$(rrd_sample_count < /dev/null)" = 0 ] \
+	&& ok "rrd_sample_count on empty input == 0 (a bare number, not padded)" \
+	|| fail "empty-input count wrong: [$(rrd_sample_count < /dev/null)]"
+
+# -- ragged output: RRDtool 1.0.x formatting we cannot pin down ---------------
+# Built with printf rather than a fixture file so the trailing whitespace and the
+# whitespace-only line survive any future whitespace-stripping tooling.
+printf '%s\n' \
+	'                           value' \
+	'' \
+	'1754006400: 1.0000000000e+03   ' \
+	'1754006430:' \
+	'1754006460: UNKN' \
+	'1754006490: U' \
+	'   ' \
+	'1754006520: 2.5000000000e+03' \
+	'1754006550: 42' \
+	'1754006580: 0.5' \
+	> "$tmp/fetch-ragged"
+rrd_samples < "$tmp/fetch-ragged" > "$tmp/samples-ragged"
+want_ragged='1000.000000
+2500.000000
+42.000000
+0.500000'
+[ "$(cat "$tmp/samples-ragged")" = "$want_ragged" ] \
+	&& ok "ragged output: trailing whitespace, empty rows, UNKN and U tolerated without garbage" \
+	|| fail "ragged output parsed wrong: $(cat "$tmp/samples-ragged")"
+[ "$(rrd_sample_count < "$tmp/samples-ragged")" = 4 ] \
+	&& ok "ragged output -> reported count 4" \
+	|| fail "ragged count wrong: $(rrd_sample_count < "$tmp/samples-ragged")"
+
+# -- the invocation is `rrdtool fetch <file> AVERAGE ...`, never xport --------
+rrdstub="$tmp/rrdtool-stub"
+rrdargs="$tmp/rrdtool-args"
+cat > "$rrdstub" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$rrdargs"
+cat "$FIXD/rrdtool-fetch-normal.txt"
+EOF
+chmod +x "$rrdstub"
+: > "$rrdargs"
+: > "$tmp/fake.rrd"
+
+piped=$(CAKE_AUTORATE_RRDTOOL="$rrdstub" rrd_fetch "$tmp/fake.rrd" --start end-6h | rrd_samples | rrd_sample_count)
+grep -qx "fetch $tmp/fake.rrd AVERAGE --start end-6h" "$rrdargs" \
+	&& ok "rrd_fetch invokes 'rrdtool fetch <file> AVERAGE --start end-6h'" \
+	|| fail "rrd_fetch argv wrong: $(cat "$rrdargs")"
+grep -q 'xport' "$rrdargs" \
+	&& fail "rrd_fetch used xport, which RRDtool 1.0.x does not have" \
+	|| ok "rrd_fetch never invokes xport (absent before RRDtool 1.2)"
+[ "$piped" = 5 ] \
+	&& ok "rrd_fetch | rrd_samples | rrd_sample_count == 5 end to end" \
+	|| fail "end-to-end pipe wrong: $piped"
+
+# a missing RRD or a missing rrdtool is a normal state on a fresh install: fail
+# quietly rather than erroring, and never reach the binary for a file that is not
+# there.
+: > "$rrdargs"
+if CAKE_AUTORATE_RRDTOOL="$rrdstub" rrd_fetch "$tmp/no-such.rrd" >/dev/null 2>&1; then
+	fail "rrd_fetch succeeded for a missing RRD"
+else
+	ok "rrd_fetch returns non-zero for a missing RRD"
+fi
+[ ! -s "$rrdargs" ] \
+	&& ok "rrdtool was NOT invoked for a missing RRD" \
+	|| fail "rrdtool WAS invoked for a missing RRD: $(cat "$rrdargs")"
+if CAKE_AUTORATE_RRDTOOL="$tmp/no-such-rrdtool" rrd_fetch "$tmp/fake.rrd" >/dev/null 2>&1; then
+	fail "rrd_fetch succeeded with no rrdtool binary"
+else
+	ok "rrd_fetch returns non-zero when rrdtool is absent"
+fi
+
+# the strongest form of the constraint: no CODE path in the backend can reach
+# xport. Comment lines are excluded because the header deliberately explains why
+# xport is unusable; -w keeps the word "export" from matching.
+if grep -v '^[[:space:]]*#' "$RPCD" | grep -qw 'xport'; then
+	fail "the rpcd backend has code mentioning xport, absent from RRDtool 1.0.x"
+else
+	ok "no code path in the rpcd backend can reach xport"
+fi
 
 # ==========================================================================
 echo
