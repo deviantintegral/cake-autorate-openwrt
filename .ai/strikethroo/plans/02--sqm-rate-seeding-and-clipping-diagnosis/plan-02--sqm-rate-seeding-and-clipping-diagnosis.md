@@ -386,10 +386,24 @@ so the graph is acyclic by construction.
 > `CAKE_AUTORATE_RPCD_LIB=1` and calling `do_calibration` directly. Not a defect —
 > but it means the dispatch path itself is only covered on device.
 
-### Phase 3: User interface
+### ✅ Phase 3: User interface
 **Parallel Tasks:**
-- Task 005: "Seed rates from SQM" action and clipping notice on the Essentials
-  tab (depends on: 002, 004)
+- ✔️ Task 005: "Seed rates from SQM" action and clipping notice on the Essentials
+  tab (depends on: 002, 004) — `completed`
+
+> Decision logic was pushed down into two new pure helpers in `live.js`
+> (`seedPlan`, `calibrationReport`) and unit-tested; only the DOM/framework
+> wiring is left to Playwright, per the project's test philosophy. `live.test.js`
+> grew 23 → 40 tests.
+>
+> **Known limitation:** the notice does not survive a map re-render (Save & Apply
+> or Add instance replaces the section DOM); a reload restores it. This is the
+> same limitation the existing `updateIfWarning` interface warnings already have.
+> The seed control self-heals, since its widget recomputes.
+>
+> **Follow-on for Phase 4:** the Essentials tab gained a button and a notice, so
+> the committed visual baselines under
+> `tests/ui/visual/02-config-form.spec.js-snapshots` will need regenerating.
 
 ### Post-phase Actions
 

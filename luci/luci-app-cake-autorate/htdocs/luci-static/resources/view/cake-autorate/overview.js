@@ -23,6 +23,18 @@
  * behind it. The version shown is the PACKAGE version 3.2.2, not the 3.2.1 the
  * daemon reports for itself -- upstream forgot to bump that at tag v3.2.2.
  *
+ * The Essentials tab also carries the two calibration aids, both of which lean
+ * on pure helpers in cake-autorate.live so the decisions stay unit-tested:
+ *   - "Seed rates from SQM": fills the six shaper-rate widgets from the rates
+ *     SQM is already configured with (live.seedPlan). It writes into the FORM
+ *     ONLY -- no rpcd write method, no ACL change; the user reviews the numbers
+ *     and uses the form's own Save & Apply.
+ *   - the clipping notice: the read-only `calibration` verdict
+ *     (live.calibrationReport), fetched once at render because it is derived
+ *     from days of recorded statistics. It is DISPLAY ONLY and deliberately
+ *     carries no control that applies a value -- it names the field and the
+ *     evidence, and the user decides.
+ *
  * Selectors the Playwright suites rely on:
  *   - each option row:      div.cbi-value[data-name="<uci_option>"]
  *   - the interface warn:   div.cbi-value[data-name="dl_if"|"ul_if"]
@@ -31,6 +43,24 @@
  *   - the search box:       input#cake-autorate-filter
  *   - the group tabs:       [data-tab="essentials|shaper|pingers|reflectors|
  *                            detection|idle|logging"]
+ *   - the seed control row: div.cbi-value[data-name="_seed_rates"]
+ *   - the seed button:      button.cake-seed-btn[data-cake-seed="<instance>"]
+ *                            (carries `disabled` when there is nothing to seed)
+ *   - the seed reason:      .cake-seed-reason[data-cake-seed="<instance>"]
+ *                            [data-cake-seed-state="ready|blocked"] -- the
+ *                            sentence saying what it will fill, or why it will
+ *                            not
+ *   - the clipping notice:  .cake-calibration[data-cake-calibration="<instance>"]
+ *                            [data-level="ok|warn|info"][data-available="0|1"],
+ *                            plus data-reason="no-rrdtool|no-rrd|no-data|error"
+ *                            when data-available="0". Appended to that
+ *                            section's div[data-tab="essentials"] pane.
+ *   - its summary line:     .cake-calibration-summary
+ *   - one verdict line:     .cake-calibration-dir[data-direction="dl|ul"]
+ *                            [data-verdict="pinned-max|floored-min|ok|
+ *                            insufficient-data"][data-level="ok|warn|info"],
+ *                            plus data-field="<uci_option>" when the verdict
+ *                            names a field to change
  */
 
 var PKG_VERSION = '3.2.2';
@@ -41,6 +71,16 @@ var DOC_URL = 'https://github.com/lynxthecat/cake-autorate/wiki';
 var callSqmInterfaces = rpc.declare({
 	object: 'cake-autorate',
 	method: 'sqm_interfaces',
+	expect: { '': {} }
+});
+
+/* The read-only clipping verdict for one instance. Read-only in the strong
+ * sense: the ACL grants it under `read` only, and nothing in this view offers
+ * to act on what it says. */
+var callCalibration = rpc.declare({
+	object: 'cake-autorate',
+	method: 'calibration',
+	params: ['instance'],
 	expect: { '': {} }
 });
 
@@ -192,6 +232,59 @@ function updateIfWarning(opt, section_id, direction, sqm) {
 	node.textContent = res.message;
 }
 
+/* The section element the CBI map built for one instance. */
+function sectionNode(mapEl, section_id) {
+	return mapEl ? mapEl.querySelector('#cbi-cake-autorate-' + section_id) : null;
+}
+
+/*
+ * Render one section's clipping notice at the foot of its Essentials pane,
+ * beside the rate fields it is about. Mirrors updateIfWarning: same alert
+ * classes, level in a data attribute, built once and refreshed in place.
+ *
+ * DISPLAY ONLY. It states which bound the shaper sat against, for what share of
+ * how many samples, over how long, and which UCI field that implicates -- and
+ * then stops. There is deliberately no control here that writes the value: the
+ * evidence is what makes the recommendation judgeable, and acting on it is the
+ * user's call through the six fields above.
+ */
+function updateCalibrationNotice(sectionEl, instance, report) {
+	if (!sectionEl)
+		return;
+
+	var pane = sectionEl.querySelector('div[data-tab="essentials"]') || sectionEl;
+	var node = pane.querySelector('.cake-calibration[data-cake-calibration="' + instance + '"]');
+
+	if (!node) {
+		node = E('div', { 'class': 'cake-calibration', 'data-cake-calibration': instance });
+		pane.appendChild(node);
+	}
+
+	node.className = 'cake-calibration ' + warnClass(report.level);
+	node.setAttribute('data-level', report.level);
+	node.setAttribute('data-available', report.available ? '1' : '0');
+	if (report.reason)
+		node.setAttribute('data-reason', report.reason);
+	else
+		node.removeAttribute('data-reason');
+
+	var kids = [ E('div', { 'class': 'cake-calibration-summary' }, report.summary) ];
+
+	report.directions.forEach(function (d) {
+		var attrs = {
+			'class': 'cake-calibration-dir',
+			'data-direction': d.dir,
+			'data-verdict': d.verdict,
+			'data-level': d.level
+		};
+		if (d.field)
+			attrs['data-field'] = d.field;
+		kids.push(E('div', attrs, d.message));
+	});
+
+	node.replaceChildren.apply(node, kids);
+}
+
 return view.extend({
 	render: function () {
 		return callSqmInterfaces().then(L.bind(this.renderForm, this), L.bind(function () {
@@ -203,6 +296,11 @@ return view.extend({
 
 	renderForm: function (sqm) {
 		var ifChoices = live.interfaceChoices(sqm);
+
+		/* The rendered map, once m.render() has resolved. The seed control is
+		 * refreshed both from that post-render pass and from the ul_if widget's
+		 * onchange, and neither can reach the DOM before this is set. */
+		var mapRoot = null;
 
 		/* The form must render exactly the 66 upstream options, split across
 		 * groups as expected. If it does not, say so rather than let the page
@@ -309,6 +407,10 @@ return view.extend({
 				o.rmempty = true;
 				o.onchange = function (ev, section_id) {
 					updateIfWarning(this, section_id, direction, sqm);
+					/* ul_if is what the SQM rates are keyed on, so changing it
+					 * changes whether there is anything to seed. */
+					if (direction === 'ul')
+						refreshSeedControl(section_id);
 				};
 				ifOpts[opt.name] = { opt: o, direction: direction };
 				return;
@@ -379,7 +481,138 @@ return view.extend({
 			});
 		});
 
+		/* --- "Seed rates from SQM" ------------------------------------------
+		 * Fills the six shaper-rate widgets from SQM's own configured rates.
+		 * The whole action stays client-side: it sets widget values, and the
+		 * user saves them with the form's existing Save & Apply. No rpcd write
+		 * method is called and no ACL entry is needed, because nothing new
+		 * writes -- the values travel out through the path the form already has.
+		 */
+
+		/* The section's egress device, taken from the ul_if WIDGET rather than
+		 * from UCI, so seeding works the moment an interface is picked and does
+		 * not wait for a save. Falls back to the saved value while the form is
+		 * still being built and no widget exists yet. */
+		function currentEgress(section_id) {
+			var found = m.lookupOption('ul_if', section_id);
+			if (!found || !found[0])
+				return '';
+			var el = found[0].getUIElement(section_id);
+			var v = el ? el.getValue() : found[0].cfgvalue(section_id);
+			return (v == null) ? '' : String(v);
+		}
+
+		/*
+		 * Write both trios into the widgets, then re-run the ordering check on
+		 * every field that moved. Validation is deferred until all six values
+		 * are in place: checkRateOrder reads its siblings off their widgets, so
+		 * validating mid-write would flag an inconsistency the user never
+		 * created. (A seeded trio is min <= base = max, so the check passes --
+		 * but it still has to run, to clear any error already on screen.)
+		 */
+		function applySeed(section_id, plan) {
+			var written = 0, touched = [];
+
+			options.RATE_TRIOS.forEach(function (trio) {
+				var t = plan[trio.dir];
+				/* A direction with no usable SQM rate is left exactly as it is;
+				 * the two are independent. */
+				if (!t)
+					return;
+				['min', 'base', 'max'].forEach(function (k) {
+					var found = m.lookupOption(trio[k], section_id);
+					if (!found || !found[0])
+						return;
+					var el = found[0].getUIElement(section_id);
+					if (!el)
+						return;
+					el.setValue(String(t[k]));
+					touched.push(trio[k]);
+					written++;
+				});
+			});
+
+			touched.forEach(function (name) {
+				var found = m.lookupOption(name, section_id);
+				if (found && found[0])
+					found[0].triggerValidation(section_id);
+			});
+
+			return written;
+		}
+
+		/* Enable or disable the control for one section and say why, from the
+		 * interface currently in the ul_if widget. */
+		function refreshSeedControl(section_id) {
+			var btn = mapRoot ? mapRoot.querySelector('button[data-cake-seed="' + section_id + '"]') : null;
+			var reasonEl = mapRoot ? mapRoot.querySelector('.cake-seed-reason[data-cake-seed="' + section_id + '"]') : null;
+			if (!btn || !reasonEl)
+				return;
+
+			var plan = live.seedPlan(sqm, currentEgress(section_id));
+			btn.disabled = !plan.enabled;
+			reasonEl.setAttribute('data-cake-seed-state', plan.enabled ? 'ready' : 'blocked');
+			reasonEl.textContent = plan.message;
+		}
+
+		function handleSeed(section_id) {
+			var plan = live.seedPlan(sqm, currentEgress(section_id));
+
+			/* Defensive: the button is disabled in this state, so this only
+			 * fires if the widget and the DOM ever disagree. */
+			if (!plan.enabled) {
+				ui.addNotification(null, E('p', {}, plan.message), 'warning');
+				refreshSeedControl(section_id);
+				return;
+			}
+
+			var written = applySeed(section_id, plan);
+			refreshSeedControl(section_id);
+			ui.addNotification(null, E('p', {},
+				_('Filled %d shaper rate field(s) on instance "%s" from SQM. Nothing has been saved — review the values and press Save & Apply.')
+					.format(written, section_id)), 'info');
+		}
+
+		/*
+		 * A pseudo-option, not one of the 66: form.Button writes no UCI key, and
+		 * write/remove are pinned to no-ops here so it can never invent one. Any
+		 * key outside the 66 plus `enabled` would be dropped by the bridge's
+		 * unknown-key guard and fail the coverage assertion.
+		 */
+		var seed = s.taboption('essentials', form.Button, '_seed_rates',
+			_('Seed rates from SQM'),
+			_('Fill the six shaper rates above from the download and upload rates SQM is already configured with for this instance\'s upload interface. Values are only put into the form; you review them and save.'));
+		seed.write = function () {};
+		seed.remove = function () {};
+		seed.renderWidget = function (section_id) {
+			/* Decided here rather than only in the post-render pass so the
+			 * control is never briefly offered in a state where it would
+			 * refuse -- and so a section added after the first render (which
+			 * re-renders the map but does not re-run that pass) still comes up
+			 * disabled with the right reason. */
+			var plan = live.seedPlan(sqm, currentEgress(section_id));
+
+			return E('div', { 'class': 'cake-seed' }, [
+				E('button', {
+					'type': 'button',
+					'class': 'cbi-button cbi-button-action cake-seed-btn',
+					'data-cake-seed': section_id,
+					'disabled': plan.enabled ? null : 'disabled',
+					'click': function (ev) {
+						ev.preventDefault();
+						handleSeed(section_id);
+					}
+				}, _('Seed rates from SQM')),
+				E('div', {
+					'class': 'cake-seed-reason',
+					'data-cake-seed': section_id,
+					'data-cake-seed-state': plan.enabled ? 'ready' : 'blocked'
+				}, plan.message)
+			]);
+		};
+
 		return m.render().then(function (mapEl) {
+			mapRoot = mapEl;
 			var nodes = [];
 
 			/* CSS: while filtering, reveal every tab pane and hide the tab bar
@@ -388,11 +621,20 @@ return view.extend({
 				'.cake-filtering [data-tab-title]{height:auto !important;opacity:1 !important;overflow:visible !important;}' +
 				'.cake-filtering .cbi-tabmenu{display:none !important;}' +
 				'.cake-filtering .cbi-tab-descr{display:none !important;}' +
+				/* While filtering, only matching option rows are of interest --
+				 * the per-section notice is not one of them. */
+				'.cake-filtering .cake-calibration{display:none !important;}' +
 				'#cake-autorate-toolbar{display:flex;flex-wrap:wrap;gap:.5em;align-items:center;margin:.5em 0;}' +
 				'#cake-autorate-filter{flex:1 1 20em;max-width:32em;}' +
 				'#cake-autorate-filter-status{opacity:.75;font-size:90%;}' +
 				'.cake-if-warn{margin-top:.4em;padding:.4em .6em;font-size:90%;}' +
-				'.cake-if-warn.cake-if-ok{color:#2e7d32;padding:.2em 0;}'));
+				'.cake-if-warn.cake-if-ok{color:#2e7d32;padding:.2em 0;}' +
+				'.cake-seed{display:flex;flex-direction:column;align-items:flex-start;gap:.4em;}' +
+				'.cake-seed-reason{font-size:90%;opacity:.85;max-width:60em;}' +
+				'.cake-calibration{margin:1em 0 .5em;padding:.5em .7em;font-size:90%;}' +
+				'.cake-calibration.cake-if-ok{color:#2e7d32;padding:.2em 0;}' +
+				'.cake-calibration-summary{font-weight:bold;margin-bottom:.35em;}' +
+				'.cake-calibration-dir{margin:.25em 0;}'));
 
 			nodes.push(E('p', {}, [
 				E('strong', {}, 'cake-autorate ' + PKG_VERSION), ' · ',
@@ -447,7 +689,37 @@ return view.extend({
 				});
 			});
 
-			return E('div', {}, nodes);
+			/* Same reason, same pass: decide whether each section's seed control
+			 * can run and state why in the DOM before anything is displayed. */
+			sids.forEach(refreshSeedControl);
+
+			var root = E('div', {}, nodes);
+
+			/*
+			 * The clipping verdict, read ONCE. It is derived from days of
+			 * recorded shaper-rate statistics, so it cannot meaningfully change
+			 * while the page is open and polling it would only cost ubus calls.
+			 *
+			 * Every failure degrades to a notice that says so: a rejected call
+			 * (rpcd too old, method missing, permission denied) is caught per
+			 * instance, and the whole block is caught again around the render,
+			 * so a broken calibration path can never take the configuration form
+			 * down with it -- the same contract the sqm_interfaces fallback has.
+			 */
+			return Promise.all(sids.map(function (sid) {
+				return callCalibration(sid).then(function (res) {
+					return { sid: sid, report: live.calibrationReport(res) };
+				}, function () {
+					return { sid: sid, report: live.calibrationReport(null) };
+				});
+			})).then(function (results) {
+				results.forEach(function (r) {
+					updateCalibrationNotice(sectionNode(mapEl, r.sid), r.sid, r.report);
+				});
+				return root;
+			}).catch(function () {
+				return root;
+			});
 		});
 	}
 });
