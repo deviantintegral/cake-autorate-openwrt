@@ -19,6 +19,7 @@ with **`apk`**.
 ./tests/run-unit.sh              # everything; exits non-zero if any suite fails
 ./tests/run-unit.sh --list       # what it found, without running it
 ./tests/run-unit.sh --verbose    # output from passing suites too
+./tests/run-unit.sh --no-skip    # a skipped suite is a failure (what CI passes)
 ```
 
 The runner **discovers** suites rather than listing them:
@@ -41,7 +42,16 @@ exposes `run.sh`, not `test-*.sh`, and the UI suites are driven by
 
 Node is only needed for the node suites and for the graph-definition checks,
 which load the LuCI class file to compare it against the collectd reader. Without
-node those **skip with a NOTE**; CI installs node so they never skip there.
+node those **skip with a NOTE** — right on a build host that has not installed
+it, wrong anywhere automated. CI and the release gate install node on purpose and
+pass `--no-skip`, which turns those skips into failures: if the setup step ever
+breaks, the job goes red rather than reporting a green pass over checks it never
+ran. (`--no-skip` reaches self-skipping shell suites via `UNIT_NO_SKIP=1` in the
+environment, since suites are invoked with no arguments.)
+
+The libuci-dependent checks in `test-uci-schema.sh` are a deliberate exception:
+libuci is genuinely unavailable on any build host, CI included, so those stay a
+NOTE and are covered on-device by the VM harness instead.
 
 ## Building the apks first
 
