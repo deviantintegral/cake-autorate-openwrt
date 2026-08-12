@@ -91,7 +91,11 @@ function fieldText(row, field) {
 	switch (field) {
 		case 'running':   return row.running ? _('running') : _('stopped');
 		case 'uptime_s':  return live.formatUptime(row.uptime_s);
-		case 'datetime':  return fmtStr(row.datetime);
+		/* The age suffix only appears once the feed has gone quiet -- the daemon
+		 * sleeps through an idle link and stops emitting SUMMARY lines, so the
+		 * table can legitimately sit still on the last sample. */
+		case 'datetime':  return (row.datetime == null || row.datetime === '')
+			? '—' : String(row.datetime) + live.sampleAgeSuffix(row.age_s);
 		case 'available': return row.running ? _('No data yet') : _('Stopped');
 		case 'reason':    return REASON_TEXT[row.reason] || _('No live data available.');
 		default:

@@ -80,11 +80,26 @@ consumers parse the same `SUMMARY` lines:
 Both share **one** field contract: a `SUMMARY` line is 13 `"; "`-separated
 fields, field 0 == `SUMMARY` (documented in
 `docs/upstream-option-inventory.md` §3). The unprefixed `SUMMARY_HEADER` line is
-**not** a status line — it is ignored by the exact `^SUMMARY; ` match. If you
-touch either parser, keep the two in lockstep with that contract, and keep the
-forced logging options (Invariant 1) that guarantee the stream exists. **Do not
-invent a status file** — the whole design assumes the log stream is the
-interface.
+**not** a status line — its field 0 is `SUMMARY_HEADER`, so an exact field-0
+match skips it. If you touch either parser, keep the two in lockstep with that
+contract, and keep the forced logging options (Invariant 1) that guarantee the
+stream exists. **Do not invent a status file** — the whole design assumes the log
+stream is the interface.
+
+Two properties of that stream are not optional knowledge, because both consumers
+report nothing without handling them (`docs/upstream-option-inventory.md` §3.3.1
+and §3.3.2, and `newest_summary_line`, which is duplicated verbatim in both
+parsers):
+
+- **A live log almost always ends mid-line.** The daemon's writer flushes a
+  fixed character count (`read -N`), not whole lines, so the final record is
+  usually a fragment that still starts with `SUMMARY; `. Selecting on the prefix
+  alone picks that fragment most of the time. Take the newest record that is a
+  `SUMMARY`, has ≥ 13 fields, **and** is newline-terminated.
+- **The log rotates on a timer even when the daemon is silent**, and it goes
+  silent for as long as the link is idle (it sleeps the pingers). A freshly
+  rotated log holds only the `*_HEADER` lines, so both parsers fall back to
+  `<log>.old`.
 
 ## Other durable facts
 

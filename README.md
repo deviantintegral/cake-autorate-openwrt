@@ -40,6 +40,12 @@ instance and for the service as a whole:
 ![The LuCI live status view, showing two running instances with their CAKE
 shaper rates, achieved rates, load conditions and average OWD deltas](docs/images/status-view.png)
 
+The daemon only samples while there is traffic: with `enable_sleep_function`
+(the default) it sleeps the pingers after `sustained_idle_sleep_thr_s` of an
+idle link and stops reporting until traffic returns. The table then holds the
+last sample it did report, and **Last update** says how long ago that was —
+`16:25:36 (4m 12s ago)`. That is normal on an idle line, not a stalled service.
+
 More screenshots — the grouped advanced tabs, the option search and a two-WAN
 setup — are in the [configuration reference](docs/configuration.md). All of them
 are captured from a real OpenWrt VM by the UI suite; see

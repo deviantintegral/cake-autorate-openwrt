@@ -82,6 +82,25 @@ HEADER='SUMMARY_HEADER; LOG_DATETIME; LOG_TIMESTAMP; DL_ACHIEVED_RATE_KBPS; UL_A
 	printf 'SUMMARY; 2026-07-24-14:29:00; 1753367340.000000; 7000; 3000; 5; 5; 50; 40; dl_idle; ul_idle; 8000; 4000\n'
 } > "$WORK/cake-autorate.tertiary.log.old"
 
+# --- instance "chunked": a LIVE log as the daemon actually leaves it on disk.
+#     Its writer flushes a fixed COUNT of characters, not whole lines
+#     (`read -N ${log_file_buffer_size_B}` in maintain_log_file), so the file
+#     ends part-way through a line. The fragment still starts with "SUMMARY; ",
+#     so it must not be mistaken for the newest sample -- taking it dropped the
+#     interval entirely (and blanked the LuCI status view). The second fragment
+#     case is cut inside the LAST field, where the field count still reads 13
+#     and only the missing newline gives it away. ---
+{
+	printf '%s\n' "$HEADER"
+	printf 'SUMMARY; 2026-07-24-14:30:05; 1753367405.000000; 33000; 12000; 4; 2; 700; 300; dl_low; ul_low; 34000; 13000\n'
+	printf 'SUMMARY; 2026-07-24-14:30:05; 1753367405.5'
+} > "$WORK/cake-autorate.chunked.log"
+{
+	printf '%s\n' "$HEADER"
+	printf 'SUMMARY; 2026-07-24-14:30:06; 1753367406.000000; 21000; 9000; 4; 2; 700; 300; dl_low; ul_low; 24000; 11000\n'
+	printf 'SUMMARY; 2026-07-24-14:30:06; 1753367406.5; 88000; 7000; 4; 2; 700; 300; dl_high; ul_low; 24000; 1'
+} > "$WORK/cake-autorate.chunkedlate.log"
+
 # ---- run the reader in one-shot mode over the fixtures --------------------
 if [ ! -x "$READER" ]; then
 	printf 'FAIL: reader not found or not executable: %s\n' "$READER" >&2
@@ -92,7 +111,9 @@ OUTPUT=$(COLLECTD_HOSTNAME=testhost COLLECTD_INTERVAL=30 \
 	"$READER" \
 	"$WORK/cake-autorate.primary.log" \
 	"$WORK/cake-autorate.secondary.log" \
-	"$WORK/cake-autorate.tertiary.log" 2>/dev/null)
+	"$WORK/cake-autorate.tertiary.log" \
+	"$WORK/cake-autorate.chunked.log" \
+	"$WORK/cake-autorate.chunkedlate.log" 2>/dev/null)
 
 # ---- assertions: primary (last SUMMARY line only) -------------------------
 have 'primary dl achieved rate'  'PUTVAL "testhost/cake_autorate-primary/bitrate-dl_achieved" interval=30 N:48000'
@@ -121,6 +142,14 @@ have 'secondary dl owd delta'          'PUTVAL "testhost/cake_autorate-secondary
 # ---- assertions: tertiary (rotated -> read from .log.old) -----------------
 have 'tertiary falls back to .old rate' 'PUTVAL "testhost/cake_autorate-tertiary/bitrate-dl_achieved" interval=30 N:7000'
 have 'tertiary falls back to .old load' 'PUTVAL "testhost/cake_autorate-tertiary/gauge-dl_load" interval=30 N:0'
+
+# ---- assertions: chunked (log ending mid-line, the normal live state) ------
+have 'chunked reports the last COMPLETE summary' 'PUTVAL "testhost/cake_autorate-chunked/bitrate-dl_achieved" interval=30 N:33000'
+have 'chunked still emits a load gauge'          'PUTVAL "testhost/cake_autorate-chunked/gauge-dl_load" interval=30 N:1'
+hasnt 'chunked fragment not read as a rate'      'cake_autorate-chunked/bitrate-dl_achieved" interval=30 N:1753367405.5'
+have 'fragment cut inside the last field ignored' 'PUTVAL "testhost/cake_autorate-chunkedlate/bitrate-ul_shaper" interval=30 N:11000'
+hasnt 'field-count-13 fragment not published'     'cake_autorate-chunkedlate/bitrate-dl_achieved" interval=30 N:88000'
+hasnt 'fragment load state not published'         'cake_autorate-chunkedlate/gauge-dl_load" interval=30 N:2'
 
 # ---- summary --------------------------------------------------------------
 printf '\n%s passed, %s failed\n' "$pass" "$fail"

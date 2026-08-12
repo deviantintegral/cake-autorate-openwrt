@@ -63,6 +63,29 @@ test('formatUptime: sub-minute, minutes, hours, days', function () {
 	assert.strictEqual(mod.formatUptime(2 * 86400 + 3 * 3600 + 30), '2d 03h');
 });
 
+/* ---- sampleAgeSuffix ------------------------------------------------------
+ * The daemon writes a SUMMARY per ping response, but it sleeps through an idle
+ * link and stops writing altogether, and rpcd keeps serving the last sample it
+ * wrote. The suffix is how a frozen table admits it is frozen. */
+test('sampleAgeSuffix: silent while the feed is live', function () {
+	assert.strictEqual(mod.sampleAgeSuffix(0), '');
+	assert.strictEqual(mod.sampleAgeSuffix(3), '');
+	assert.strictEqual(mod.sampleAgeSuffix(mod.STALE_AFTER_S - 1), '');
+});
+
+test('sampleAgeSuffix: reports the age once the feed goes quiet', function () {
+	assert.strictEqual(mod.sampleAgeSuffix(mod.STALE_AFTER_S), ' (15s ago)');
+	assert.strictEqual(mod.sampleAgeSuffix(125), ' (2m 05s ago)');
+	assert.strictEqual(mod.sampleAgeSuffix(3 * 3600 + 4 * 60), ' (3h 04m ago)');
+	assert.strictEqual(mod.sampleAgeSuffix('600'), ' (10m 00s ago)');
+});
+
+test('sampleAgeSuffix: no age from the backend -> no suffix', function () {
+	assert.strictEqual(mod.sampleAgeSuffix(null), '');
+	assert.strictEqual(mod.sampleAgeSuffix(undefined), '');
+	assert.strictEqual(mod.sampleAgeSuffix('nonsense'), '');
+});
+
 /* ---- statusRow / statusRows --------------------------------------------- */
 test('statusRow: available instance normalizes all summary fields', function () {
 	const r = mod.statusRow('wan', {
@@ -72,7 +95,7 @@ test('statusRow: available instance normalizes all summary fields', function () 
 		dl_avg_owd_delta_us: 150, ul_avg_owd_delta_us: 80,
 		dl_load_condition: 'dl_high', ul_load_condition: 'ul_low',
 		cake_dl_rate_kbps: 20000, cake_ul_rate_kbps: 5000,
-		datetime: '2026-07-23T12:00:00', epoch: 1753272000
+		datetime: '2026-07-23T12:00:00', epoch: 1753272000, age_s: 42
 	});
 	assert.strictEqual(r.instance, 'wan');
 	assert.strictEqual(r.available, true);
@@ -85,6 +108,13 @@ test('statusRow: available instance normalizes all summary fields', function () 
 	assert.strictEqual(r.ul_avg_owd_delta_us, 80);
 	assert.strictEqual(r.datetime, '2026-07-23T12:00:00');
 	assert.strictEqual(r.epoch, 1753272000);
+	assert.strictEqual(r.age_s, 42);
+});
+
+test('statusRow: an old backend that sends no age_s leaves the field null', function () {
+	const r = mod.statusRow('wan', { available: true, running: true, cake_dl_rate_kbps: 1 });
+	assert.strictEqual(r.age_s, null);
+	assert.strictEqual(mod.sampleAgeSuffix(r.age_s), '');
 });
 
 test('statusRow: available:false keeps run state, carries reason, nulls metrics', function () {
