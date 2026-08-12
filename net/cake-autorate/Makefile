@@ -155,4 +155,34 @@ define Package/cake-autorate/install
 	$(INSTALL_BIN) ./files/cake-autorate.rpcd $(1)/usr/libexec/rpcd/cake-autorate
 endef
 
+# rpcd enumerates /usr/libexec/rpcd/* exactly once, when it starts. So the ubus
+# object installed above -- the one the LuCI status view, the SQM interface
+# picker and the service buttons all call -- does not exist until rpcd is told
+# to come back, and installing this package alone left it missing until the next
+# reboot. Same postinst the upstream rpcd-mod-* packages carry.
+#
+# `reload`, NOT `restart`: on SIGHUP rpcd freezes its sessions, re-execs itself
+# with RPC_HANGUP=1 and thaws them, so the new process re-scans
+# /usr/libexec/rpcd AND re-reads /usr/share/rpcd/acl.d for every restored
+# session -- nobody is logged out. A `restart` drops the sessions instead and
+# forces every open LuCI tab to log in again. (rpcd main.c: exec_self();
+# session.c: rpc_session_from_blob -> rpc_login_setup_acls.)
+#
+# The wait is not decoration. When both packages are installed together apk runs
+# this script first and luci-app-cake-autorate's postinst -- which reloads rpcd
+# again, to pick up its ACL file -- moments later. execv restores the default
+# SIGHUP disposition, so a second SIGHUP arriving inside this re-exec window
+# kills rpcd outright; procd respawns it *without* RPC_HANGUP, which purges every
+# session and logs the admin out. Waiting for the object to reappear closes that
+# window, and doubles as a check that the reload took at all.
+define Package/cake-autorate/postinst
+#!/bin/sh
+[ -n "$$IPKG_INSTROOT" ] && exit 0
+/etc/init.d/rpcd reload
+command -v ubus >/dev/null 2>&1 || exit 0
+ubus -t 10 wait_for cake-autorate || \
+	logger -t cake-autorate "rpcd did not register the cake-autorate ubus object after a reload -- the LuCI status view stays empty until rpcd restarts"
+exit 0
+endef
+
 $(eval $(call BuildPackage,cake-autorate))

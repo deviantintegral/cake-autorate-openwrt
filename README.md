@@ -176,15 +176,41 @@ After installing, configure at least one instance's interfaces and rates
 
 ### If the LuCI menu entry does not appear
 
-Every node in the menu is gated on this package's ACL file
-(`/usr/share/rpcd/acl.d/luci-app-cake-autorate.json`), which rpcd reads at
-startup and at login. The postinst that LuCI's build system generates already
-runs `/etc/init.d/rpcd reload`; if the entry is still missing, restart rpcd and
-log back in:
+Installing is meant to be enough — both packages reload rpcd from their postinst
+— but the failure mode is worth knowing, because the app looks uninstalled when
+it hits.
+
+Two things live behind rpcd, and rpcd only picks either of them up when it
+(re)starts:
+
+- **the ACL file** `/usr/share/rpcd/acl.d/luci-app-cake-autorate.json`. Every
+  node of the menu declares `depends.acl` on that group, and rpcd resolves a
+  session's groups from `acl.d` when the session is created — at login, and again
+  when it thaws a session across a reload. A browser session that was **already
+  logged in** when you installed holds a group list that predates the file, so
+  LuCI filters the entire menu away for it;
+- **the ubus object** `cake-autorate` (`/usr/libexec/rpcd/cake-autorate`, from
+  the base package), which the Status view and the interface pickers call. rpcd
+  enumerates `/usr/libexec/rpcd/` only at startup.
+
+`/etc/init.d/rpcd reload` fixes both without logging anyone out: rpcd freezes its
+sessions, re-execs, and thaws them, re-reading `acl.d` for each one. So the first
+thing to try is a reload, then reload the LuCI page:
+
+```sh
+/etc/init.d/rpcd reload
+ubus list cake-autorate      # prints the object name when rpcd is serving it
+```
+
+If the menu is still missing, restart rpcd and log back in — that drops every
+rpcd session, so the fresh login is guaranteed to read `acl.d`:
 
 ```sh
 /etc/init.d/rpcd restart
 ```
+
+Either way it is a bug worth reporting; `logread | grep cake-autorate` shows the
+warning the base package's postinst logs when its reload did not take.
 
 ## Documentation
 
