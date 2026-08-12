@@ -1,4 +1,4 @@
-From: Andrew Chadwick <andrew@furrypaws.ca>
+From: Andrew Berry <andrew@furrypaws.ca>
 Subject: fping parser: reject a sample whose fields are not numbers
 
 Upstream's fping arm treats ANY line of 12 whitespace fields arriving on the

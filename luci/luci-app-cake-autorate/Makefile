@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2026 Andrew Chadwick
+# Copyright (C) 2026 Andrew Berry
 #
 # This is free software, licensed under the GNU General Public License v2.
 #
@@ -35,7 +35,7 @@ LUCI_PKGARCH:=all
 # apk will not walk a version backwards.
 PKG_VERSION:=0.2.1
 PKG_RELEASE:=1
-PKG_MAINTAINER:=Andrew Chadwick <andrew@furrypaws.ca>
+PKG_MAINTAINER:=Andrew Berry <andrew@furrypaws.ca>
 PKG_LICENSE:=GPL-2.0-or-later
 
 # No Package/.../postinst here ON PURPOSE, even though this package cannot work
