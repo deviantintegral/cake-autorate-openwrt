@@ -107,6 +107,19 @@ interface.
   ul_if choices from live SQM), `status` (read, per-instance from the log),
   `service` (write, start/stop/restart/reload). Instance names are validated
   against `[A-Za-z0-9_]+`; service actions against a fixed allowlist.
+- **Both packages must reload rpcd from their postinst.** rpcd enumerates
+  `/usr/libexec/rpcd/*` only when it starts, and resolves a session's ACL groups
+  from `/usr/share/rpcd/acl.d/` only when that session is created (at login, or
+  when it thaws one across a reload). So installing leaves the ubus object
+  unregistered *and* leaves every already-logged-in admin holding a group list
+  that predates our ACL file — which LuCI shows as a menu that is simply not
+  there. The base package carries the reload by hand (`package.mk` has no
+  default); the LuCI app gets it from `luci.mk`, whose default postinst is
+  `ifndef`-guarded, so **do not define one in that Makefile** — you would replace
+  the feed's version and silently drop its menu-cache eviction. Always `reload`,
+  never `restart`: reload freezes/thaws sessions in place, a restart logs
+  everyone out. Covered by the integration harness, which asserts `ubus list
+  cake-autorate` succeeds after `apk add` with no manual reload.
 - **libuci + `set -u`.** OpenWrt's `/lib/functions.sh` is not nounset-clean; any
   script that runs `set -u` and sources it must wrap the `config_load`/
   `config_foreach` block in `set +u` (the bridge and the rpcd backend both do).
