@@ -151,6 +151,21 @@ fail until a human refreshes the hash; the PR body carries the checklist. If you
 add a new place that names either version, add a matching pattern to
 `renovate.json` — and keep it non-overlapping with the existing ones.
 
+**One script owns every version field.**
+`.github/scripts/package-versions.sh` is the authority, and `release.yml`'s
+`validate` job runs it before it will publish a tag. The contract: the LuCI app's
+`PKG_VERSION` **is** the repo tag (it has no upstream, and its `PKG_RELEASE` is
+pinned at 1); the base package's `PKG_VERSION` is upstream's, so its
+`PKG_RELEASE` carries the packaging revision — reset to 1 when upstream moves,
++1 when `net/cake-autorate/` changed since the previous tag. Cutting a release
+means `package-versions.sh --fix --tag vX.Y.Z`, then commit, then tag; do not
+hand-edit either field, and do not give Renovate a second claim on `PKG_RELEASE`.
+This is load-bearing: v0.1.0 and v0.2.0 each published
+`cake-autorate-3.2.2-r1.apk` and `luci-app-cake-autorate-1.0.0-r1.apk` with
+*different payloads*, and because apk compares name-version-release, a router
+holding r1 was never offered r1 again — the second release could not reach anyone
+who had installed the first, and nothing in the pipeline said so.
+
 **Every `uses:` is pinned to a commit sha, with the version in a trailing
 comment.** A tag is a mutable pointer, and `release.yml` is the one job that
 holds `contents: write` — a retagged action would be running with it. Add new

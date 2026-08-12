@@ -159,7 +159,7 @@ boot timeout.
 This matters because the skip path is indistinguishable from success at the exit
 code: without it, an infra breakage silently skips every spec and
 `npx playwright test` still exits 0. That has bitten this repo for real — a
-half-built SDK left `luci-app-cake-autorate-1.0.0-r1.apk` missing, `run.sh` exited
+half-built SDK left `luci-app-cake-autorate-*.apk` missing, `run.sh` exited
 3, all specs skipped, and the run reported success. Use the env var whenever a
 green result is supposed to mean "the browser actually drove a live LuCI".
 

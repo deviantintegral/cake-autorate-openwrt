@@ -81,7 +81,7 @@
       "prBodyNotes": [
         "**Manual follow-up required before this can merge.**",
         "- `net/cake-autorate/Makefile`: `PKG_HASH` still names the OLD tarball. Regenerate it with `make package/cake-autorate/download V=s` in the SDK, or `curl -sL 'https://codeload.github.com/lynxthecat/cake-autorate/tar.gz/refs/tags/v<version>' | sha256sum`.",
-        "- Reset `PKG_RELEASE:=1` -- it counts packaging-only revisions of a given upstream version.",
+        "- Leave `PKG_RELEASE` ALONE. `.github/scripts/package-versions.sh` owns it and resets it to 1 on an upstream bump; `release.yml` runs the check before it will publish a tag, so a stale value is caught there with the expected number. Two owners for one field is how v0.1.0 and v0.2.0 came to ship different payloads under the same `-r1`.",
         "- Re-check `docs/upstream-option-inventory.md` and the UCI bridge for options added, renamed or removed upstream."
       ]
     },
