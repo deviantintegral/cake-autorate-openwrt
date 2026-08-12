@@ -251,22 +251,40 @@ line), never a silent green pass. See [`docs/testing.md`](docs/testing.md).
 
 ## Cutting a release
 
-`.github/workflows/release.yml` runs on a `v*` tag. It rebuilds both packages
-from the tagged tree and publishes them as `.apk` assets on a GitHub Release,
-with a `SHA256SUMS` file alongside.
+Run the **Prepare release** workflow (Actions → Prepare release → Run workflow)
+with the version you intend to ship, e.g. `1.1.0`. It opens a pull request
+containing that release's version-field bump and publishes nothing. Review the
+diff, merge it, then tag the merge commit:
 
 ```sh
+git checkout main && git pull
 git tag -a v1.1.0 -m "v1.1.0"
 git push origin v1.1.0
 ```
 
-A tag publishes **immediately** — there is no draft step. A tag with a suffix
+`.github/workflows/release.yml` runs on the `v*` tag. It rebuilds both packages
+from the tagged tree and publishes them as `.apk` assets on a GitHub Release,
+with a `SHA256SUMS` file alongside.
+
+The tag publishes **immediately** — there is no draft step. A tag with a suffix
 (`v1.1.0-rc1`) is marked as a prerelease so it never becomes "Latest".
 
-The tag is the *repository's* version and is deliberately not checked against
-either package's `PKG_VERSION`: `cake-autorate` tracks **upstream's** version
-(3.2.2) and is not ours to choose, while `luci-app-cake-autorate` carries its
-own. Bump `PKG_RELEASE` when the packaging changes without an upstream bump.
+Preparing the bump before tagging is not ceremony. Both packages' version fields
+are checked against the tag, and a tag-time failure cannot be fixed in place: the
+tag names a commit, so correcting it costs a deleted tag, a pull request, and a
+re-tag. Writing the numbers first means the tag is only ever cut from a commit
+that already satisfies the contract.
+
+You can still do it by hand — `package-versions.sh --fix --tag v1.1.0`, commit,
+tag — and the numbers come out identical; the workflow just runs that script for
+you. Either way, do not hand-edit the version fields: the script owns them.
+`AGENTS.md` records the contract it enforces, and the script's own header
+explains each rule.
+
+The half of that contract which does not depend on the tag — `cake-autorate`'s
+`PKG_RELEASE` — is also checked on every pull request, so a missing bump
+normally surfaces long before a release.
+
 The release notes list the real built filenames, so what a tag shipped is never
 ambiguous.
 

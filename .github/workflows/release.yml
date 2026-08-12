@@ -4,6 +4,12 @@
 # publishes IMMEDIATELY -- there is no draft step to review. Re-cutting means
 # `gh release delete` + a new tag, so check the version bump before tagging.
 #
+# Do not tag by hand as the first step. Run the `prepare-release.yml` workflow,
+# merge the version-bump PR it opens, and tag THAT commit. The `validate` job
+# below cannot be fixed in place when it fails -- a tag names a commit, so the
+# fix is a new commit, and the tag has to be deleted and re-cut (v0.2.2). Cutting
+# the tag from an already-validated commit removes that failure mode.
+#
 # What it does:
 #   1. Builds both packages from the TAGGED tree through the same reusable
 #      `build.yml` that CI uses, so the released .apk files come off the exact

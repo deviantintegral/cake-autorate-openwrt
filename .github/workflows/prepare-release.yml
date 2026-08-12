@@ -1,0 +1,239 @@
+# cake-autorate OpenWrt package + LuCI UI — RELEASE PREPARATION.
+#
+# Trigger: manual (Actions -> Prepare release -> Run workflow), with the version
+# you intend to tag. It publishes NOTHING. It opens a pull request containing
+# the version-field bump for that release, and stops.
+#
+# WHY THIS EXISTS. release.yml's `validate` job owns the version contract, and
+# it is correct, but a v* tag push is the last possible moment to discover a
+# violation: the tag names a commit, so the fix has to be a NEW commit, and
+# every miss costs `git push --delete` + a PR + a re-tag. v0.2.2 was precisely
+# that -- and the change that made the bump necessary had merged weeks earlier.
+#
+# Ordering is the whole fix. Here the numbers are written FIRST, reviewed as a
+# two-line diff, and merged; only then is a tag cut, from a commit that already
+# satisfies the contract. The tag can no longer be the thing that discovers the
+# problem, because the fields were never hand-written to begin with:
+# package-versions.sh --fix is the only author of both packages' version fields,
+# which is the same property the check asserts.
+#
+# THE FULL RELEASE FLOW:
+#
+#   1. Run this workflow with the version (e.g. 0.2.3).
+#   2. Review the PR it opens -- it should be a one- or two-line diff.
+#   3. Merge it.
+#   4. Tag the merge commit and push:
+#          git checkout main && git pull
+#          git tag v0.2.3 && git push origin v0.2.3
+#      release.yml then builds and publishes.
+#
+# Step 4 stays MANUAL on purpose. release.yml publishes immediately with no
+# draft step, so auto-tagging on merge would make a merge button a publish
+# button. The gate is worth one command.
+#
+# CI ON THE PR IT OPENS. A pull request created with the default GITHUB_TOKEN
+# does NOT trigger `on: pull_request` workflows -- GitHub suppresses that to
+# prevent workflow recursion -- so the PR would sit with no checks. Two ways
+# out, in order of preference:
+#
+#   * Set a `RELEASE_PAT` repository secret (a fine-grained PAT with Contents:
+#     write and Pull requests: write). It is used automatically when present,
+#     and PRs it opens run CI normally.
+#   * Without it, the fallback is GITHUB_TOKEN: the PR opens but stays
+#     check-less. Close and reopen it to run CI. Nothing unsafe ships either
+#     way -- release.yml re-validates the contract and rebuilds from the tag.
+#
+# GITHUB_TOKEN also requires Settings -> Actions -> General -> "Allow GitHub
+# Actions to create and approve pull requests" to be enabled. A PAT does not.
+
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the leading v (e.g. 0.2.3, or 0.3.0-rc1 for a prerelease)"
+        required: true
+        type: string
+
+# Two runs preparing two versions would fight over the same branch name only if
+# the versions matched, but serialising is free and keeps the PR list honest.
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    name: Open the version-bump PR
+    runs-on: ubuntu-24.04
+    steps:
+      # fetch-depth: 0 is REQUIRED: every rule package-versions.sh applies is
+      # relative to `git describe`, so it needs full history AND tags. The token
+      # is the one that will push the branch, so it is chosen here, once.
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+
+      # Normalise and validate before anything writes to a file. `v0.2.3` and
+      # `0.2.3` are both things a human types into the dispatch box; only one of
+      # them is what the rest of the workflow means by "version".
+      - name: Validate the requested version
+        id: v
+        # Through the environment, never interpolated into the script body: a
+        # `${{ }}` expression is pasted in as source text before bash sees it, so
+        # a crafted input would run as code. Write access is required to
+        # dispatch this, but the pattern costs nothing and the habit matters.
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          version="${VERSION_INPUT#v}"
+          tag="v$version"
+
+          # The same shape release.yml's `validate` step enforces, applied here
+          # so a typo costs a 10-second job instead of a pushed branch and a PR.
+          if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error title=Bad version::'$tag' is not vX.Y.Z or vX.Y.Z-suffix"
+            exit 1
+          fi
+
+          # Preparing a version that already shipped would open a PR renumbering
+          # the tree backwards -- apk will not walk a version backwards, so this
+          # is worth refusing rather than reviewing.
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error title=Tag exists::$tag is already tagged. Pick the next version, or delete the tag first."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "branch=release/$tag" >> "$GITHUB_OUTPUT"
+          echo "Preparing $tag"
+
+      # The single source of truth for both packages' version fields. --fix is
+      # the same code path as the check, so what it writes is by construction
+      # what release.yml will accept.
+      - name: Rewrite the version fields
+        run: .github/scripts/package-versions.sh --fix --tag "${{ steps.v.outputs.tag }}"
+
+      # A no-op is a legitimate outcome, not a failure: it means the tree
+      # already satisfies the contract for this version and can be tagged as-is
+      # (a docs-only release after an upstream bump, say). Opening an empty PR
+      # would be noise, so say so and stop.
+      - name: Detect whether anything changed
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "The version fields already satisfy the contract for ${{ steps.v.outputs.tag }}."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff
+          fi
+
+      - name: Commit the bump on a release branch
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+          BRANCH: ${{ steps.v.outputs.branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git switch -c "$BRANCH"
+
+          # Separate -m arguments rather than one multi-line string: this block
+          # is indented inside the YAML, and a quoted heredoc-style message
+          # would carry that indentation into the commit body.
+          git commit -a \
+            -m "chore(release): bump package versions for $TAG" \
+            -m "Written by .github/scripts/package-versions.sh --fix --tag $TAG, which is the sole owner of both packages' version fields." \
+            -m "Merge this, then tag the merge commit: git checkout main && git pull, then git tag $TAG && git push origin $TAG"
+
+          # A re-run for the same version should update its branch, not fail on
+          # it. Every run is a fresh checkout with no remote-tracking ref, and
+          # --force-with-lease refuses ("stale info") without one, so fetch
+          # first. On the first run for a version there is nothing to fetch and
+          # git says "couldn't find remote ref" -- expected, and not an error.
+          #
+          # Fetching immediately before pushing does narrow the lease to the gap
+          # between the two commands, so this is closer to --force than the flag
+          # suggests. It is acceptable because the branch name is derived from
+          # the version and nothing but this workflow writes to release/*; the
+          # lease is here for the case where two runs overlap, which the
+          # concurrency group above already makes unlikely.
+          git fetch origin "$BRANCH" || true
+          git push --force-with-lease --set-upstream origin "$BRANCH"
+
+      - name: Open the pull request
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+          BRANCH: ${{ steps.v.outputs.branch }}
+          BASE: ${{ github.ref_name }}
+        run: |
+          # A re-run pushes to the same branch, and its PR is already open.
+          existing="$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')"
+          if [ -n "$existing" ]; then
+            echo "Updated the existing PR: $existing"
+            echo "pr=$existing" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # Body via an UNindented heredoc: this block is indented inside the
+          # YAML, and 10 leading spaces would render the whole body as a code
+          # block. The quoted delimiter would disable $TAG, so it is unquoted
+          # and the backticks are escaped.
+          cat > /tmp/pr-body.md <<EOF
+          Prepares \`$TAG\`. Generated by the **Prepare release** workflow; the diff is
+          written by \`.github/scripts/package-versions.sh --fix\`, the sole owner of
+          both packages' version fields.
+
+          Review the diff, merge, then tag the merge commit:
+
+          \`\`\`
+          git checkout main && git pull
+          git tag $TAG && git push origin $TAG
+          \`\`\`
+
+          \`release.yml\` re-validates the contract and builds from the tag, so nothing
+          publishes until then.
+          EOF
+
+          url="$(gh pr create \
+            --base "$BASE" \
+            --head "$BRANCH" \
+            --title "chore(release): bump package versions for $TAG" \
+            --body-file /tmp/pr-body.md)"
+
+          echo "Opened $url"
+          echo "pr=$url" >> "$GITHUB_ENV"
+
+      - name: Summary
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          {
+            if [ "${{ steps.diff.outputs.changed }}" = "true" ]; then
+              echo "### Release $TAG prepared"
+              echo ""
+              echo "PR: ${pr:-(see the job log)}"
+              echo ""
+              echo "Merge it, then tag the merge commit:"
+            else
+              echo "### Nothing to bump for $TAG"
+              echo ""
+              echo "The version fields already satisfy the contract. Tag directly:"
+            fi
+            echo ""
+            echo '```'
+            echo "git checkout main && git pull"
+            echo "git tag $TAG && git push origin $TAG"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
