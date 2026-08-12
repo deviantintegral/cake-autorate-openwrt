@@ -161,8 +161,9 @@ repository key; verify them against the release's `SHA256SUMS` first. There is
 **no hosted apk repository yet**, so the `apk add cake-autorate` form does not
 work — that needs a signed package index, which this feed does not publish.
 
-`apk` pulls the runtime dependencies automatically: `bash`, `fping`, `tc-tiny`,
-`kmod-sched-cake`, **`sqm-scripts`** and `collectd-mod-exec`.
+`apk` pulls the runtime dependencies automatically: `bash`, `fping`, `tc`,
+`kmod-sched-cake`, **`sqm-scripts`** and `collectd-mod-exec`. `tc` is virtual —
+whichever of `tc-tiny` or `tc-full` your router already has satisfies it.
 
 After installing, configure at least one instance's interfaces and rates
 (LuCI → **Network → CAKE Autorate**, or edit `/etc/config/cake-autorate`), set
