@@ -145,7 +145,7 @@ jobs:
           # cake-autorate's remaining runtime deps (bash, fping, sqm-scripts,
           # collectd-mod-exec) are written into the .apk metadata whether or not
           # they exist at build time -- verified: the produced apk records
-          # "depends: libc bash fping tc-tiny kmod-sched-cake sqm-scripts
+          # "depends: libc bash fping tc kmod-sched-cake sqm-scripts
           # collectd-mod-exec" -- and apk resolves them from the official repos
           # on the device. The integration job proves that for real in a VM,
           # which beats a build-time presence check, and pulling `packages` in
@@ -229,7 +229,9 @@ jobs:
           # The runtime deps are never built here (NO_DEPS, and several live in
           # feeds we do not update), so assert they survived into the metadata.
           # A dropped dependency would install cleanly and then fail at runtime.
-          for dep in bash collectd-mod-exec fping kmod-sched-cake libc sqm-scripts tc-tiny; do
+          # `tc`, not `tc-tiny`: naming a concrete provider here would let the
+          # v0.2.0 install conflict (tc-tiny vs an installed tc-full) back in.
+          for dep in bash collectd-mod-exec fping kmod-sched-cake libc sqm-scripts tc; do
             "$apk" adbdump "$ca" | grep -qx "    - $dep" || {
               echo "::error title=Lost dependency::cake-autorate.apk no longer declares '$dep'"
               exit 1

@@ -9,7 +9,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=cake-autorate
 PKG_VERSION:=3.2.2
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 # Pinned upstream: lynxthecat/cake-autorate tag v3.2.2 (the original bash
 # implementation, not the "Darkmoon" C rewrite). See
@@ -50,7 +50,14 @@ define Package/cake-autorate
   # collectd-mod-exec: statistics reach luci-app-statistics through a collectd
   # `exec` reader (the tail plugin cannot map the load-condition string to a
   # number).
-  DEPENDS:=+bash +fping +tc-tiny +kmod-sched-cake +sqm-scripts +collectd-mod-exec
+  #
+  # `tc`, NOT `tc-tiny`: iproute2 ships two mutually-conflicting providers of
+  # the virtual `tc` package, and either one runs the `tc qdisc change` the
+  # daemon issues. Naming the tiny variant made the package uninstallable on
+  # any router that had already chosen tc-full -- apk cannot satisfy a concrete
+  # tc-tiny and an installed tc-full at once. sqm-scripts depends on `tc` for
+  # the same reason.
+  DEPENDS:=+bash +fping +tc +kmod-sched-cake +sqm-scripts +collectd-mod-exec
   PKGARCH:=$(PKG_ARCH)
 endef
 

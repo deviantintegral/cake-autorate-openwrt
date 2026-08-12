@@ -14,9 +14,10 @@ apk add --allow-untrusted ./__CA_APK__ ./__LUCI_APK__
 `--allow-untrusted` is required because these assets are not signed by an apk
 repository key. Verify them against `SHA256SUMS` below before installing.
 
-`apk` pulls the runtime dependencies (`bash`, `fping`, `tc-tiny`,
+`apk` pulls the runtime dependencies (`bash`, `fping`, `tc`,
 `kmod-sched-cake`, `sqm-scripts`, `collectd-mod-exec`) from the official
-OpenWrt repositories.
+OpenWrt repositories. `tc` is virtual, so an existing `tc-tiny` *or* `tc-full`
+satisfies it.
 
 Then configure at least one instance's interfaces and rates (LuCI →
 **Network → CAKE Autorate**, or `/etc/config/cake-autorate`), set

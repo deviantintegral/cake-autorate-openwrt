@@ -92,6 +92,13 @@ interface.
   `ifb4<iface>` ingress); cake-autorate **only adjusts its bandwidth** and never
   calls `tc` to create a qdisc. The init script starts at `START=97`, after SQM
   (`START=50`), so the qdisc already exists.
+- **Never `DEPENDS` on a concrete provider of a virtual package.** Use `+tc`,
+  never `+tc-tiny`. iproute2 ships `tc-tiny` and `tc-full`; both provide virtual
+  `tc` and they **conflict with each other**, so naming one makes the package
+  uninstallable on any router that already chose the other. v0.2.0 shipped
+  `+tc-tiny` and died on real routers with `unable to select packages`. A fresh
+  test VM has no `tc` provider yet and so resolves either spelling happily —
+  which is why `harness.install()` now installs `tc-full` first, on purpose.
 - **One instance per enabled section.** procd opens one supervised daemon per
   enabled UCI section; the init script re-runs the bridge (whole-world sync +
   prune) on start/reload and aborts the (re)start if the bridge fails, so a

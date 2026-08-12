@@ -167,8 +167,23 @@ class Harness:
     def install(self):
         self.log("== installing packages ==")
         self.g("apk update 2>&1 | tail -2", t=180)
+        # Pull tc-full in FIRST, as its own transaction, so it lands in `world`
+        # as an explicit user choice. This is the v0.2.0 regression guard: the
+        # package used to depend on the concrete `tc-tiny`, which is
+        # unsatisfiable next to an installed tc-full (the two providers of
+        # virtual `tc` conflict), and every install below this line would fail
+        # with "unable to select packages". A fresh VM picks a provider only
+        # when something asks for `tc`, so without this the bug is invisible
+        # here -- the old dependency resolved fine and shipped broken.
+        #
+        # Assert on the output text, not rc: every apk call here is piped into
+        # `tail`, so the recorded rc is tail's and is always 0.
+        _, out_tc = self.g("apk add tc-full 2>&1 | tail -5", t=180,
+                           capture="apk-tc-full.txt")
+        self.A.check("install: tc-full (the conflicting `tc` provider) installed first",
+                     "ERROR" not in out_tc, out_tc.strip()[-200:])
         # Dependencies plus the two local apks. apk pulls the declared deps
-        # (bash, fping, tc-tiny, kmod-sched-cake, sqm-scripts, collectd-mod-exec,
+        # (bash, fping, tc, kmod-sched-cake, sqm-scripts, collectd-mod-exec,
         # luci-base) from the online repo; rrdtool is added so RRDs get written.
         #
         # The apks are matched by glob, so no version appears here (see
@@ -182,6 +197,11 @@ class Harness:
             "/mnt/seed/cake-autorate-*.apk "
             "/mnt/seed/luci-app-cake-autorate-*.apk 2>&1 | tail -25",
             t=400, capture="apk-install.txt")
+        # Name the failure mode rather than letting it surface as ten missing
+        # paths: if a dependency ever names a concrete provider of a virtual
+        # package again, apk refuses the whole transaction with exactly this.
+        self.A.check("install: apk resolved every dependency (no provider conflict)",
+                     "unable to select packages" not in out, out.strip()[-300:])
         paths = {
             "fping": "$(command -v fping)",
             "tc": "$(command -v tc)",
