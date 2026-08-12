@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2026 Andrew Chadwick
+# Copyright (C) 2026 Andrew Berry
 #
 # This is free software, licensed under the GNU General Public License v2.
 # See /LICENSE for more information.
@@ -41,7 +41,7 @@ PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 # outright. A patch that stops applying fails this build loudly, which is the
 # intended prompt to re-check it on an upstream bump.
 
-PKG_MAINTAINER:=Andrew Chadwick <andrew@furrypaws.ca>
+PKG_MAINTAINER:=Andrew Berry <andrew@furrypaws.ca>
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_LICENSE_FILES:=LICENCE.md
 
