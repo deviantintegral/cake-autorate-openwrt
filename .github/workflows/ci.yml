@@ -1,10 +1,14 @@
 # cake-autorate OpenWrt package + LuCI UI — Continuous Integration
 #
-# One workflow, four jobs, all pinned to OpenWrt 25.12.5:
+# One workflow, five jobs, all pinned to OpenWrt 25.12.5:
 #
 #   unit        Every off-device suite, via `tests/run-unit.sh`. Needs no SDK, no
 #               .apk and no KVM, so it has NO `needs:` and reports in well under
 #               a minute — the fast signal the other three cannot give.
+#   versions    The half of the package version contract that does not need a
+#               tag, so a forgotten PKG_RELEASE bump surfaces on the PR that
+#               causes it rather than on the release tag, where it cannot be
+#               fixed in place. Seconds; no `needs:`.
 #   build       Delegates to the reusable `build.yml`: 25.12.5 SDK, this repo as
 #               a `src-link` feed, both packages built ONCE (PKG_ARCH:=all /
 #               noarch, so there is NO per-arch matrix), .apk files uploaded as
@@ -105,6 +109,39 @@ jobs:
             ./tests/run-unit.sh --list
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # VERSIONS — the half of the version contract that does not need a tag.
+  #
+  # The full contract is enforced by release.yml on a v* tag push. That gate is
+  # correct but it is also the LAST possible moment: a tag names a commit, so a
+  # failure there cannot be fixed in place — it costs a deleted tag, a PR, and a
+  # re-tag. v0.2.2 hit exactly that, and the change responsible had landed weeks
+  # earlier with nothing able to say so.
+  #
+  # cake-autorate's PKG_RELEASE rules never reference the next tag — only the
+  # previous one and the tree — so they can run here, on every PR, and catch that
+  # class of miss while it is still one commit on a branch. luci-app's
+  # PKG_VERSION *is* the tag and genuinely cannot be known mid-cycle, so it stays
+  # a tag-time gate. Same script, same code path, `--pr` selects the subset.
+  #
+  # Cheap enough (seconds, no SDK) to run unconditionally rather than filtering
+  # on paths: a `paths:` filter here would make the job skip on exactly the PRs
+  # that need it least and complicate required-check configuration.
+  # ---------------------------------------------------------------------------
+  versions:
+    name: Package version contract
+    runs-on: ubuntu-24.04
+    steps:
+      # fetch-depth: 0 is REQUIRED, not tidiness: every rule the check applies is
+      # relative to `git describe`, so it needs full history AND tags.
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check the package version contract (tag-independent rules)
+        run: .github/scripts/package-versions.sh --pr
 
   # ---------------------------------------------------------------------------
   # BUILD — set up the pinned SDK, build the feed once, publish the .apk files.
