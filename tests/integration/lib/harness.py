@@ -239,8 +239,33 @@ class Harness:
         self.A.check("install: postinst left the ubus object 'cake-autorate' live "
                      "(no manual rpcd reload)",
                      live.strip().endswith("LIVE"), live.strip()[-120:])
-        # Repair anyway, so a regression in the postinst fails exactly the check
-        # above instead of cascading through every later ubus assertion.
+        # Teeth for the BASE package's postinst specifically. The check above
+        # passes either way: apk installs luci-app-cake-autorate second, and the
+        # postinst luci.mk generates for it reloads rpcd too, so it would cover
+        # for a base package that reloads nothing. Exercise that package alone --
+        # take the object away, reinstall just its apk, and require its own
+        # postinst to bring the object back with no help from anyone.
+        #
+        # `wait_for session` (rpcd's own object) first, so "the object is gone" is
+        # judged against an rpcd that is actually up again, not one still starting.
+        self.g("rm -f /usr/libexec/rpcd/cake-autorate; /etc/init.d/rpcd restart; "
+               "ubus -t 10 wait_for session; echo rpcd-back")
+        rc, gone = self.g("ubus list cake-autorate >/dev/null 2>&1 "
+                          "&& echo LIVE || echo MISSING")
+        self.A.check("install: control -- removing the backend really does cost "
+                     "rpcd the object (so the check below can fail)",
+                     gone.strip().endswith("MISSING"), gone.strip()[-120:])
+        self.g("apk add --allow-untrusted --force-reinstall "
+               "/mnt/seed/cake-autorate-*.apk 2>&1 | tail -5", t=200,
+               capture="apk-reinstall-base.txt")
+        rc, back = self.g("ubus list cake-autorate >/dev/null 2>&1 "
+                          "&& echo LIVE || echo MISSING",
+                          capture="ubus-object-after-base-reinstall.txt")
+        self.A.check("install: the base package's own postinst reloads rpcd -- "
+                     "object live after reinstalling that package alone",
+                     back.strip().endswith("LIVE"), back.strip()[-120:])
+        # Repair anyway, so a regression in either postinst fails exactly the
+        # checks above instead of cascading through every later ubus assertion.
         self.g("/etc/init.d/rpcd reload 2>/dev/null; sleep 1; echo rpcd-reloaded")
 
     def configure_network_and_sqm(self):
