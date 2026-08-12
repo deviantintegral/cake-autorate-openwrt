@@ -223,8 +223,18 @@ add a new place that names either version, add a matching pattern to
 pinned at 1); the base package's `PKG_VERSION` is upstream's, so its
 `PKG_RELEASE` carries the packaging revision — reset to 1 when upstream moves,
 +1 when `net/cake-autorate/` changed since the previous tag. Cutting a release
-means `package-versions.sh --fix --tag vX.Y.Z`, then commit, then tag; do not
+means running the **Prepare release** workflow, which runs
+`package-versions.sh --fix --tag vX.Y.Z` and opens the bump as a PR: merge it,
+then tag the merge commit. Doing it by hand produces the same numbers. Do not
 hand-edit either field, and do not give Renovate a second claim on `PKG_RELEASE`.
+
+The check runs at two moments, because only one of the two packages' rules needs
+the tag. `ci.yml` runs `--pr` on every pull request, covering `cake-autorate`'s
+`PKG_RELEASE` (whose inputs are the *previous* tag and the tree). The LuCI app's
+`PKG_VERSION` **is** the next tag and cannot be known mid-cycle, so `release.yml`
+still gates it. Preparing the bump before tagging is what keeps that gate from
+being the discovery mechanism: a tag names a commit, so a failure there is only
+fixable by deleting the tag and re-cutting it.
 This is load-bearing: v0.1.0 and v0.2.0 each published
 `cake-autorate-3.2.2-r1.apk` and `luci-app-cake-autorate-1.0.0-r1.apk` with
 *different payloads*, and because apk compares name-version-release, a router
