@@ -67,6 +67,27 @@
 #            build, so a wrong number costs seconds instead of a full build that
 #            then refuses to publish.
 #
+# WHEN THE CHECK CAN RUN. A tag-time failure cannot be fixed in place: the tag
+# names a commit, and the fix has to be a NEW commit, so every miss costs a
+# deleted tag, a PR, and a re-tag. v0.2.2 was exactly that -- the offending
+# change had landed weeks earlier and nothing could say so until the tag went up.
+#
+# Only ONE of the two packages' rules actually needs the tag:
+#
+#   luci-app-cake-autorate   NEEDS it. PKG_VERSION *is* the tag, and mid-cycle
+#                            nobody knows what the next tag will be. Tag-time
+#                            gate, unavoidably.
+#   cake-autorate            does NOT. Every input to the PKG_RELEASE rules is
+#                            the PREVIOUS tag and the working tree; the next tag
+#                            never appears in them.
+#
+# So --pr runs the cake-autorate half alone, with no tag, on every pull request
+# (see ci.yml). It is the same code path -- there is no second implementation to
+# drift -- and it is idempotent for the same reason the tag-time check is:
+# `expected` is computed from the previous TAG, never from HEAD. The first PR
+# after a release that touches net/cake-autorate/ bumps 2 -> 3; every later PR
+# recomputes the same 3 and passes untouched.
+#
 # Expected values are computed from the PREVIOUS TAG's Makefiles, never from the
 # working tree's. That makes the script idempotent: it converges on the same
 # numbers however many times it runs, and however many PRs land between two tags.
@@ -80,9 +101,12 @@
 #
 # Usage:
 #   .github/scripts/package-versions.sh [--fix] [--tag vX.Y.Z]
+#   .github/scripts/package-versions.sh [--fix] --pr
 #
 # The tag defaults to $GITHUB_REF_NAME (set for a tag push in Actions). Pass
-# --tag when running locally, where the tag does not exist yet.
+# --tag when running locally, where the tag does not exist yet. --pr takes no
+# tag and checks only the rules that do not need one; it is mutually exclusive
+# with --tag.
 
 set -euo pipefail
 
@@ -101,16 +125,23 @@ usage() {
 }
 
 fix=0
+pr=0
 tag="${GITHUB_REF_NAME:-}"
+tag_given=0
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--fix) fix=1 ;;
+	--pr) pr=1 ;;
 	--tag)
 		shift
 		tag="${1:-}"
+		tag_given=1
 		;;
-	--tag=*) tag="${1#--tag=}" ;;
+	--tag=*)
+		tag="${1#--tag=}"
+		tag_given=1
+		;;
 	-h | --help)
 		usage
 		exit 0
@@ -120,12 +151,20 @@ while [ $# -gt 0 ]; do
 	shift
 done
 
-[ -n "$tag" ] || die "no tag given: pass --tag vX.Y.Z (or set GITHUB_REF_NAME)"
+# --pr means "no tag is known yet", so a tag alongside it is a contradiction
+# rather than extra information. GITHUB_REF_NAME is NOT a contradiction: on a
+# pull_request event it holds a refs/pull ref, not a tag, and --pr ignores it.
+if [ "$pr" = "1" ]; then
+	[ "$tag_given" = "0" ] || die "--pr and --tag are mutually exclusive"
+	tag=""
+else
+	[ -n "$tag" ] || die "no tag given: pass --tag vX.Y.Z, or --pr (or set GITHUB_REF_NAME)"
 
-# Same shape release.yml's `validate` step enforces. Checked here too so a local
-# --fix run cannot write a nonsense version into a Makefile.
-printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' ||
-	die "'$tag' is not vX.Y.Z or vX.Y.Z-suffix"
+	# Same shape release.yml's `validate` step enforces. Checked here too so a
+	# local --fix run cannot write a nonsense version into a Makefile.
+	printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' ||
+		die "'$tag' is not vX.Y.Z or vX.Y.Z-suffix"
+fi
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -174,8 +213,13 @@ payload_changed() { # payload_changed <rev> <dir>
 
 # The tag exists in CI (we are building it) and does not exist locally (we are
 # preparing it), so --exclude covers both: the previous tag is the newest tag
-# reachable from HEAD that is not this one.
-prev_tag="$(git describe --tags --abbrev=0 --exclude="$tag" HEAD 2>/dev/null || true)"
+# reachable from HEAD that is not this one. Under --pr there is no tag to
+# exclude -- the newest reachable tag simply IS the previous release.
+if [ "$pr" = "1" ]; then
+	prev_tag="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"
+else
+	prev_tag="$(git describe --tags --abbrev=0 --exclude="$tag" HEAD 2>/dev/null || true)"
+fi
 
 # --- luci-app-cake-autorate: PKG_VERSION == the tag, PKG_RELEASE pinned -------
 #
@@ -184,12 +228,18 @@ prev_tag="$(git describe --tags --abbrev=0 --exclude="$tag" HEAD 2>/dev/null || 
 # luci-app-cake-autorate-0.3.0-rc1-r1.apk and leave apk to guess where the
 # version ends. Translate to apk's own suffix spelling, which also sorts the way
 # a prerelease should -- 0.3.0_rc1 is BELOW 0.3.0, not above it.
-luci_want_version="${tag#v}"
-luci_want_version="${luci_want_version//-/_}"
-luci_want_release="1"
-
+#
+# Both of this package's fields are skipped under --pr: PKG_VERSION is the tag,
+# and mid-cycle the tag does not exist yet. Nothing weaker is worth asserting --
+# "not equal to the last tag's version" would just demand that every PR guess.
 luci_have_version="$(mk_get "$LUCI_MK" PKG_VERSION)"
 luci_have_release="$(mk_get "$LUCI_MK" PKG_RELEASE)"
+
+if [ "$pr" = "0" ]; then
+	luci_want_version="${tag#v}"
+	luci_want_version="${luci_want_version//-/_}"
+	luci_want_release="1"
+fi
 
 # --- cake-autorate: upstream PKG_VERSION, PKG_RELEASE by the rules above ------
 ca_have_version="$(mk_get "$CA_MK" PKG_VERSION)"
@@ -230,24 +280,38 @@ row() { # row <package> <field> <have> <want>
 
 row cake-autorate PKG_VERSION "$ca_have_version" "$ca_have_version"
 row cake-autorate PKG_RELEASE "$ca_have_release" "$ca_want_release"
-row luci-app-cake-autorate PKG_VERSION "$luci_have_version" "$luci_want_version"
-row luci-app-cake-autorate PKG_RELEASE "$luci_have_release" "$luci_want_release"
+if [ "$pr" = "0" ]; then
+	row luci-app-cake-autorate PKG_VERSION "$luci_have_version" "$luci_want_version"
+	row luci-app-cake-autorate PKG_RELEASE "$luci_have_release" "$luci_want_release"
+fi
 
-printf '\ntag           %s\n' "$tag"
+printf '\ntag           %s\n' "${tag:-(none yet -- pre-tag check)}"
 printf 'previous tag  %s\n' "${prev_tag:-(none)}"
 printf 'cake-autorate PKG_RELEASE: %s\n' "$ca_why"
-printf 'luci-app-cake-autorate: PKG_VERSION follows the tag, PKG_RELEASE pinned at 1\n\n'
+if [ "$pr" = "1" ]; then
+	printf 'luci-app-cake-autorate: skipped -- its PKG_VERSION is the tag, checked at tag time\n\n'
+else
+	printf 'luci-app-cake-autorate: PKG_VERSION follows the tag, PKG_RELEASE pinned at 1\n\n'
+fi
 
 if [ "$mismatch" = "0" ]; then
-	echo "Version contract satisfied for $tag."
+	if [ "$pr" = "1" ]; then
+		echo "Version contract satisfied (tag-independent rules)."
+	else
+		echo "Version contract satisfied for $tag."
+	fi
 	exit 0
 fi
 
 if [ "$fix" = "1" ]; then
 	mk_set "$CA_MK" PKG_RELEASE "$ca_want_release"
-	mk_set "$LUCI_MK" PKG_VERSION "$luci_want_version"
-	mk_set "$LUCI_MK" PKG_RELEASE "$luci_want_release"
-	echo "Rewrote the version fields for $tag. Review the diff, commit, then tag."
+	if [ "$pr" = "0" ]; then
+		mk_set "$LUCI_MK" PKG_VERSION "$luci_want_version"
+		mk_set "$LUCI_MK" PKG_RELEASE "$luci_want_release"
+		echo "Rewrote the version fields for $tag. Review the diff, commit, then tag."
+	else
+		echo "Rewrote cake-autorate's PKG_RELEASE. Review the diff and commit."
+	fi
 	git --no-pager diff -- "$CA_MK" "$LUCI_MK"
 	exit 0
 fi
@@ -257,11 +321,34 @@ fi
 if [ "$ca_have_release" != "$ca_want_release" ]; then
 	echo "::error title=Version contract::${CA_MK}: PKG_RELEASE is ${ca_have_release}, expected ${ca_want_release} (${ca_why})"
 fi
-if [ "$luci_have_version" != "$luci_want_version" ]; then
-	echo "::error title=Version contract::${LUCI_MK}: PKG_VERSION is ${luci_have_version}, expected ${luci_want_version} (it follows the repo tag)"
+if [ "$pr" = "0" ]; then
+	if [ "$luci_have_version" != "$luci_want_version" ]; then
+		echo "::error title=Version contract::${LUCI_MK}: PKG_VERSION is ${luci_have_version}, expected ${luci_want_version} (it follows the repo tag)"
+	fi
+	if [ "$luci_have_release" != "$luci_want_release" ]; then
+		echo "::error title=Version contract::${LUCI_MK}: PKG_RELEASE is ${luci_have_release}, expected 1 (pinned: PKG_VERSION follows the tag)"
+	fi
 fi
-if [ "$luci_have_release" != "$luci_want_release" ]; then
-	echo "::error title=Version contract::${LUCI_MK}: PKG_RELEASE is ${luci_have_release}, expected 1 (pinned: PKG_VERSION follows the tag)"
+
+if [ "$pr" = "1" ]; then
+	cat >&2 <<EOF
+
+Fix it with:
+
+    .github/scripts/package-versions.sh --fix --pr
+
+then commit the result onto this branch.
+
+This branch changes ${CA_DIR}/ since ${prev_tag:-the last release} without moving
+the only field that can tell two packagings of one upstream version apart, so the
+.apk it builds would reuse a published filename -- and apk never offers a router
+a version string it already holds.
+
+Only the FIRST pull request after a release pays this. The expected value is
+computed from ${prev_tag:-the last tag} rather than from HEAD, so once it is
+bumped, every later branch recomputes the same number and passes untouched.
+EOF
+	exit 1
 fi
 
 cat >&2 <<EOF
