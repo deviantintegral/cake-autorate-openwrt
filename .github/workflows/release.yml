@@ -15,12 +15,23 @@
 # SDK. CI artifacts do not serve that purpose -- they are login-walled and
 # expire. The SHA256SUMS file is also the input the future apk-index job needs.
 #
-# NOTE ON VERSIONS: the tag is the REPO's version. It is deliberately not
-# asserted against either package's PKG_VERSION, because the two disagree by
-# design -- `cake-autorate`'s PKG_VERSION tracks UPSTREAM (3.2.2) and is not
-# ours to choose, while `luci-app-cake-autorate` carries its own (1.0.0). The
-# release notes list the real built filenames so there is no ambiguity about
-# what a given tag shipped.
+# NOTE ON VERSIONS: the two packages number themselves differently, so the
+# `validate` job below runs .github/scripts/package-versions.sh -- which owns
+# both packages' version fields and is the authority on the rules:
+#
+#   * `luci-app-cake-autorate`'s PKG_VERSION *is* this tag (minus the `v`), with
+#     PKG_RELEASE pinned at 1. It has no upstream, so the tag is its version.
+#   * `cake-autorate`'s PKG_VERSION tracks UPSTREAM (3.2.2) and is not ours to
+#     choose, so its PKG_RELEASE is the field that separates two packagings of
+#     one upstream version -- reset on an upstream bump, +1 when the package
+#     directory changed since the previous tag.
+#
+# This is a gate, not a formality: v0.1.0 and v0.2.0 both published
+# `cake-autorate-3.2.2-r1.apk` and `luci-app-cake-autorate-1.0.0-r1.apk` with
+# DIFFERENT payloads, and apk never offers a router a version string it already
+# holds -- so v0.2.0's changes could not reach a v0.1.0 install, silently. The
+# release notes still list the real built filenames, so there is no ambiguity
+# about what a given tag shipped.
 
 name: Release
 
@@ -38,10 +49,11 @@ permissions:
   contents: read
 
 jobs:
-  # Gate the build on the tag being well-formed. This is its own job, ahead of
-  # `build`, so a typo'd tag costs seconds rather than a full SDK build that
-  # then refuses to publish -- which would leave a pushed tag with no release
-  # and no obvious reason why.
+  # Gate the build on the tag being well-formed AND on the package version
+  # fields matching it. This is its own job, ahead of `build`, so a typo'd tag or
+  # a forgotten version bump costs seconds rather than a full SDK build that then
+  # refuses to publish -- which would leave a pushed tag with no release and no
+  # obvious reason why.
   validate:
     name: Validate tag
     runs-on: ubuntu-24.04
@@ -64,6 +76,18 @@ jobs:
           esac
           echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
           echo "Tag $tag validated (prerelease=$pre)"
+
+      # fetch-depth: 0 is REQUIRED, not tidiness: every rule the version check
+      # applies is relative to the previous tag, which it finds with
+      # `git describe`. A shallow clone has neither the tags nor the history to
+      # resolve one, and the check would have nothing to compare against.
+      - name: Checkout (full history + tags, for the version check)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check the package version contract
+        run: .github/scripts/package-versions.sh
 
   # Same recipe as CI. Checkout inside the reusable workflow resolves to the
   # tag, so this builds the tagged tree, not main.

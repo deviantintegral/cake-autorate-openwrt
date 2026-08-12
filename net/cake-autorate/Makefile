@@ -9,6 +9,18 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=cake-autorate
 PKG_VERSION:=3.2.2
+# PKG_RELEASE counts packagings of ONE upstream PKG_VERSION -- it is the only
+# field that can distinguish two of them, since PKG_VERSION above is upstream's
+# and not ours to choose. It resets to 1 when upstream moves (3.2.3-r1 already
+# sorts above 3.2.2-r7, because the version dominates and the release is only a
+# tiebreaker within it) and increments when anything in this directory changes
+# at the same upstream version. r2 is the +tc-tiny -> +tc fix over v0.2.0's r1.
+#
+# Owned by .github/scripts/package-versions.sh, which release.yml runs before it
+# will publish a tag; Renovate deliberately leaves it alone. Do not hand-edit --
+# run the script with --fix. Getting this wrong is silent: v0.1.0 and v0.2.0 both
+# shipped r1 with different payloads, and apk never offers a router the version
+# string it already holds.
 PKG_RELEASE:=2
 
 # Pinned upstream: lynxthecat/cake-autorate tag v3.2.2 (the original bash
