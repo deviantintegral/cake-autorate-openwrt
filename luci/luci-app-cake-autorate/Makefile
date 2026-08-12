@@ -38,6 +38,21 @@ PKG_RELEASE:=1
 PKG_MAINTAINER:=Andrew Chadwick <andrew@furrypaws.ca>
 PKG_LICENSE:=GPL-2.0-or-later
 
+# No Package/.../postinst here ON PURPOSE, even though this package cannot work
+# without one. Every node of its menu is gated on the ACL group in
+# root/usr/share/rpcd/acl.d/, and rpcd reads that directory only when a session
+# is created -- at login, and when it thaws a session across a reload. An admin
+# who is already logged in when this package lands therefore holds a session
+# that has never heard of the group, so LuCI filters the whole menu away and the
+# app looks like it did not install.
+#
+# luci.mk (included below) supplies exactly the right postinst for that: drop the
+# dispatcher's menu caches, then `/etc/init.d/rpcd reload`, which re-derives the
+# ACLs of every live session in place. Its definition is wrapped in
+# `ifndef Package/$(PKG_NAME)/postinst`, so defining one above this include would
+# SILENTLY REPLACE it -- and lose the cache eviction. Do not; fix the feed
+# instead. The base package's postinst is the one that has to be written by hand,
+# because package.mk has no such default (see net/cake-autorate/Makefile).
 include $(TOPDIR)/feeds/luci/luci.mk
 
 # call BuildPackage - OpenWrt buildroot signature

@@ -227,8 +227,20 @@ class Harness:
         self.artifact("install-artifacts.txt", "\n".join(report) + "\n")
         self.A.check("install: package + deps + all install artifacts present",
                      not missing, "missing: %s" % missing if missing else "all present")
-        # rpcd must reload to expose the new file-object as the ubus
-        # "cake-autorate" object; do it now so assert_rpcd can use real ubus.
+        # Installing must be sufficient on its own: rpcd only enumerates
+        # /usr/libexec/rpcd/* when it starts, so the base package's postinst
+        # reloads it. Assert that BEFORE any reload of our own -- the harness used
+        # to reload rpcd here unconditionally, which hid the fact that nothing in
+        # the package did, and users met that as a LuCI app whose menu did not
+        # appear until they restarted rpcd by hand.
+        rc, live = self.g("ubus list cake-autorate >/dev/null 2>&1 "
+                          "&& echo LIVE || echo MISSING",
+                          capture="ubus-object-after-install.txt")
+        self.A.check("install: postinst left the ubus object 'cake-autorate' live "
+                     "(no manual rpcd reload)",
+                     live.strip().endswith("LIVE"), live.strip()[-120:])
+        # Repair anyway, so a regression in the postinst fails exactly the check
+        # above instead of cascading through every later ubus assertion.
         self.g("/etc/init.d/rpcd reload 2>/dev/null; sleep 1; echo rpcd-reloaded")
 
     def configure_network_and_sqm(self):
