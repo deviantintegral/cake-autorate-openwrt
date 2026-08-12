@@ -121,6 +121,19 @@ interface.
   never `restart`: reload freezes/thaws sessions in place, a restart logs
   everyone out. Covered by the integration harness, which asserts `ubus list
   cake-autorate` succeeds after `apk add` with no manual reload.
+- **`per_instance` in the graph definition means DATA instance, not plugin
+  instance.** luci-app-statistics already calls `rrdargs()` once per collectd
+  plugin instance, so one panel per WAN is free and `%pi` expands to the instance
+  id. `per_instance: true` means something else — one panel per *type* instance —
+  and rrdtool.js reads our `data.instances` list **only** on the false branch,
+  falling back to the unnamed instance `''` otherwise. Setting it true therefore
+  ignores the lists, fans each definition out across the data instances of its
+  first source's type, and leaves every legend reading
+  `dt=bitrate/di=(nil)/ds=value` — which on screen looks like missing *data*, not
+  a missing definition. Keep all three graphs at `per_instance: false` (upstream's
+  `sqm.js` spells it out for the same reason). Covered by
+  `tests/statistics/test-graph-definition.sh`, which also asserts the definition
+  and the exec reader name the same metrics.
 - **libuci + `set -u`.** OpenWrt's `/lib/functions.sh` is not nounset-clean; any
   script that runs `set -u` and sources it must wrap the `config_load`/
   `config_foreach` block in `set +u` (the bridge and the rpcd backend both do).
@@ -144,8 +157,8 @@ interface.
 # fast off-device unit suites (no VM)
 tests/bridge/test-bridge.sh ; tests/schema/test-uci-schema.sh
 tests/rpcd/test-rpcd.sh ; tests/service/test-init.sh
-tests/statistics/test-collectd-parser.sh ; tests/regression/test-libuci-nounset.sh
-tests/regression/test-fping-sample-gate.sh
+tests/statistics/test-collectd-parser.sh ; tests/statistics/test-graph-definition.sh
+tests/regression/test-libuci-nounset.sh ; tests/regression/test-fping-sample-gate.sh
 
 # VM integration harness (needs QEMU + /dev/kvm)
 ./tests/integration/run.sh              # PASS / exit 0
