@@ -14,7 +14,30 @@
  * plugin name also keeps the data clear of luci-app-statistics' own tail.js.
  *
  * The reader sets the collectd plugin INSTANCE to the cake-autorate instance id
- * (e.g. "primary"), so per_instance:true draws one panel per WAN.
+ * (e.g. "primary"). One panel per WAN needs nothing from us: luci-app-statistics
+ * calls rrdargs() once per plugin instance already, and "%pi" in a title expands
+ * to that instance id.
+ *
+ * Every graph below therefore sets `per_instance: false`. That flag does NOT
+ * mean "one panel per plugin instance" -- it means "one panel per DATA instance"
+ * (the type-instance half of a `<type>-<type_instance>.rrd` filename), and
+ * rrdtool.js only reads our `data.instances` list on the false branch:
+ *
+ *     if (!opts.per_instance) {
+ *         if (L.isObject(opts.data.instances) && Array.isArray(opts.data.instances[dt]))
+ *             data_instances = opts.data.instances[dt];
+ *         ...
+ *     }
+ *     if (!Array.isArray(data_instances) || data_instances.length == 0)
+ *         data_instances = [ '' ];
+ *
+ * Set it true and the lists below are skipped entirely: every panel collapses to
+ * the unnamed instance '' (legends read "dt=bitrate/di=(nil)/ds=value"), and the
+ * outer loop fans each definition out across the data instances of its FIRST
+ * source's type. That turned these 3 graphs into 12 -- 4 bitrate panels and,
+ * because `owd` and `load` both lead with `gauge`, two identical sets of 4 gauge
+ * panels, each drawing a single unlabelled series. Upstream's sqm.js spells the
+ * false out for the same reason; so do we.
  *
  * Metrics (stock collectd types, so there is no types.db to ship):
  *   bitrate-dl_achieved / bitrate-ul_achieved   achieved rate/direction (kbit/s)
@@ -32,7 +55,7 @@ return baseclass.extend({
 		 * the classic SQM mirror layout so download/upload read at a glance.
 		 */
 		const rates = {
-			per_instance: true,
+			per_instance: false,
 			title: "%H: CAKE Autorate rates on %pi",
 			vlabel: "kbit/s",
 			number_format: "%5.0lf",
@@ -78,7 +101,7 @@ return baseclass.extend({
 		 * reacts to. Upload flipped below the axis.
 		 */
 		const owd = {
-			per_instance: true,
+			per_instance: false,
 			title: "%H: CAKE Autorate OWD delta on %pi",
 			vlabel: "us",
 			number_format: "%5.0lf",
@@ -110,7 +133,7 @@ return baseclass.extend({
 		 *   (10/11/12), -1 = unknown.
 		 */
 		const load = {
-			per_instance: true,
+			per_instance: false,
 			title: "%H: CAKE Autorate load state on %pi",
 			vlabel: "state",
 			number_format: "%4.0lf",
