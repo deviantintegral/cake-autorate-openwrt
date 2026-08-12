@@ -15,6 +15,7 @@ net/cake-autorate/            the daemon package
     cake-autorate-bridge.sh   UCI -> per-instance daemon config  (the bridge)
     cake-autorate.collectd.conf + cake-autorate-collectd.sh   collectd exec stats source
     cake-autorate.rpcd        rpcd backend (object "cake-autorate")
+  patches/                    applied to the upstream tarball at build time
 luci/luci-app-cake-autorate/  the LuCI UI (noarch; depends +cake-autorate +luci-base)
   htdocs/.../view/cake-autorate/{overview.js,status.js}   config form + live status
   htdocs/.../statistics/rrdtool/definitions/cake_autorate.js   graph definition
@@ -124,6 +125,18 @@ interface.
   script that runs `set -u` and sources it must wrap the `config_load`/
   `config_foreach` block in `set +u` (the bridge and the rpcd backend both do).
   Regression covered by `tests/regression/test-libuci-nounset.sh`.
+- **We carry one upstream patch, and it is temporary.**
+  `patches/010-reject-malformed-fping-samples.patch` makes the daemon's fping
+  arm check the two fields it does arithmetic on before trusting a sample.
+  Upstream accepts any line of 12 whitespace fields, so one malformed sample
+  reaches `printf %.3f` / `10#${...}` and, under the daemon's `set -u`, exits the
+  process — **cleanly**, so procd never respawns it and the WAN runs unshaped
+  with nothing but three lines in `logread` to say so. Upstream fixed half of
+  this in PR #392, which is merged to master but **in no release**: v3.2.2 is
+  still the newest tag, which is why it is carried here rather than picked up by
+  a version bump. Drop the patch on the upstream bump that first ships #392 —
+  `tests/regression/test-fping-sample-gate.sh` fails the moment `PKG_VERSION`
+  moves, so the bump PR cannot land without that decision being made.
 
 ## Running the tests + CI
 
@@ -132,6 +145,7 @@ interface.
 tests/bridge/test-bridge.sh ; tests/schema/test-uci-schema.sh
 tests/rpcd/test-rpcd.sh ; tests/service/test-init.sh
 tests/statistics/test-collectd-parser.sh ; tests/regression/test-libuci-nounset.sh
+tests/regression/test-fping-sample-gate.sh
 
 # VM integration harness (needs QEMU + /dev/kvm)
 ./tests/integration/run.sh              # PASS / exit 0
