@@ -16,7 +16,8 @@
  *       dl_achieved_kbps, ul_achieved_kbps, dl_sum_delays, ul_sum_delays,
  *       dl_avg_owd_delta_us, ul_avg_owd_delta_us, dl_load_condition,
  *       ul_load_condition, cake_dl_rate_kbps, cake_ul_rate_kbps, datetime,
- *       epoch }, ... }   (available:false carries reason: no-log | no-data)
+ *       epoch, age_s? }, ... }   (available:false carries reason: no-log |
+ *       no-data; age_s is the sample's age in seconds by the router's clock)
  *   sqm_interfaces {}  -> { sqm_config_present, interfaces:[{egress, ingress_ifb,
  *       sqm_enabled, ifb_present, mismatch}], egress_choices, ingress_choices,
  *       ifb_devices }.  dl_if <- ingress (ifb) choices; ul_if <- egress choices.
@@ -24,7 +25,7 @@
 
 /* Numeric summary fields, normalized to a JS number or null. */
 var NUM_FIELDS = [
-	'uptime_s', 'epoch',
+	'uptime_s', 'epoch', 'age_s',
 	'dl_achieved_kbps', 'ul_achieved_kbps',
 	'dl_sum_delays', 'ul_sum_delays',
 	'dl_avg_owd_delta_us', 'ul_avg_owd_delta_us',
@@ -88,6 +89,27 @@ function formatUptime(s) {
 	if (m > 0)
 		return m + 'm ' + pad2(sec) + 's';
 	return sec + 's';
+}
+
+/*
+ * How old a sample may be before the view calls it out. The daemon emits a
+ * SUMMARY per ping response (six pingers every 0.3 s by default), so a feed more
+ * than a few seconds behind is not live: it sleeps through an idle link
+ * (sustained_idle_sleep_thr_s) and stops emitting SUMMARY lines until traffic
+ * returns, and rpcd keeps serving the last sample it wrote.
+ */
+var STALE_AFTER_S = 15;
+
+/*
+ * sampleAgeSuffix(age_s) -- "" while the feed is live, " (12m 05s ago)" once it
+ * has gone stale. Appended to the last-update datetime so a table that has
+ * stopped moving explains itself rather than passing old numbers off as live.
+ */
+function sampleAgeSuffix(age_s) {
+	var n = toNum(age_s);
+	if (n == null || n < STALE_AFTER_S)
+		return '';
+	return ' (' + formatUptime(n) + ' ago)';
 }
 
 /*
@@ -192,7 +214,9 @@ function interfaceStatus(value, sqm, direction) {
 
 return baseclass.extend({
 	STATUS_FIELDS: STATUS_FIELDS,
+	STALE_AFTER_S: STALE_AFTER_S,
 	formatUptime: formatUptime,
+	sampleAgeSuffix: sampleAgeSuffix,
 	statusRow: statusRow,
 	statusRows: statusRows,
 	interfaceChoices: interfaceChoices,

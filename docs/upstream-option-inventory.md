@@ -256,6 +256,60 @@ MIN_UL_DELTA_EWMA_US; UL_DELTA_EWMA_US; UL_DELTA_EWMA_DELTA_US; UL_DELTA_EWMA_DE
 **`SHAPER`** — emitted on each `tc qdisc change` when `output_cake_changes=1`;
 free-form text, not a fixed-column record.
 
+### 3.3.1 How the file is written — a live log ends mid-line
+
+`maintain_log_file` in `cake-autorate.sh` does not write lines. It writes fixed
+character counts:
+
+```sh
+read -r -N "${log_file_buffer_size_B}" -t "${log_file_buffer_timeout_s}" -u "${log_fd}" log_chunk
+printf '%s' "${log_chunk}" >&${log_file_fd}
+```
+
+`read -N` stops at a **count**, not at a newline, so every flush ends the file
+wherever it happened to land — normally part-way through a record. The last line
+of a live log is therefore almost always a fragment:
+
+```
+SUMMARY; 2026-08-12-16:25:36; 17865663
+```
+
+Consequences for anything that reads this log:
+
+* A fragment still matches `^SUMMARY; `, so **"last line matching the prefix"
+  is the wrong selector.** It picks the fragment far more often than not: at the
+  default six pingers on a 0.3 s interval the daemon writes ~20 SUMMARY lines a
+  second, and the file spends nearly all of its time cut somewhere inside the
+  most recent one.
+* A field count is necessary but **not sufficient**: a cut inside the final
+  field leaves 13 fields with a truncated last value (`4184` arriving as `41`).
+  Only the absent trailing newline distinguishes it, so the last record counts
+  as usable only when the file ends on a newline.
+* Nothing is corrupted permanently — the next flush appends the remainder with
+  no separator, so the line completes itself. A reader just has to skip it until
+  it does.
+
+Both consumers therefore take the newest record that is a `SUMMARY`, carries at
+least 13 fields, **and** is newline-terminated: `newest_summary_line` in
+`cake-autorate.rpcd` and in `cake-autorate-collectd.sh`. Getting this wrong is
+not a rare edge: it made the LuCI status view flip to "no data yet" between
+polls while the daemon was writing continuously, and it silently skipped most
+collectd intervals.
+
+### 3.3.2 Rotation happens on a timer, whether or not the daemon is talking
+
+`maintain_log_file` rotates when `SECONDS - t_log_file_start_s >
+log_file_max_time_s` — a wall-clock check in its own loop, so it fires on
+`log_file_max_time_mins` (10 by default) even when the daemon has written
+nothing. And it does go quiet: with `enable_sleep_function=1` it stops the
+pingers after `sustained_idle_sleep_thr_s` of an idle link and emits no SUMMARY
+lines at all until traffic returns.
+
+`rotate_log_file` is `cat log > log.old; : > log`, so a freshly rotated log holds
+only the `*_HEADER` lines. A reader that stops there reports "no data" for an
+instance that is running perfectly well; it must fall back to
+`${log_file_path}.old`. Both consumers do.
+
 ### 3.4 Package-managed / pinned options
 
 These options control whether the parseable log stream exists at all. The
@@ -420,7 +474,8 @@ options in §3.4 (`log_to_file=1`, `output_summary_stats=1`).
 **Task 6 (statistics parser):** parse
 `/var/log/cake-autorate.<instance_id>.log`, split on `"; "`, key off field 0
 being `SUMMARY`, and use the 13-field layout in §3.3. Handle the rotation
-artefact `${log_file_path}.old` and the unprefixed `SUMMARY_HEADER` line.
+artefact `${log_file_path}.old` (§3.3.2), the unprefixed `SUMMARY_HEADER` line
+and the mid-line fragment a live log always ends with (§3.3.1).
 
 **Task 7 (LuCI):** the version string to display is the package version
 (`3.2.2`), not `cake_autorate_version` (stale `3.2.1` upstream at this tag).

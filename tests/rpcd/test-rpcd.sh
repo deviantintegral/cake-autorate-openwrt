@@ -155,6 +155,91 @@ one=$(do_status primary)
 
 # ==========================================================================
 echo
+echo "== 3b. status: a log ending mid-line is still live (chunked-writer artefact)"
+# Upstream's log writer flushes a fixed COUNT of characters, not whole lines
+# (`read -N ${log_file_buffer_size_B}` in maintain_log_file), so a live log
+# almost always ends part-way through a line. That fragment still starts with
+# "SUMMARY; ", and taking it as the newest sample is what made the status view
+# flip to "no data yet" between polls while the daemon was writing ~20 SUMMARY
+# lines a second. The newest COMPLETE line must win instead.
+logd3="$tmp/log3"; mkdir -p "$logd3"
+
+# (a) cut early in the line: 3 fields, no trailing newline
+{
+	printf '%s\n' "$SUM_HEADER"
+	printf '%s\n' "$SUM_PRIMARY_OLD"
+	printf '%s\n' "$SUM_PRIMARY"
+	printf 'SUMMARY; 2026-07-23-10:00:01; 17532648'
+} > "$logd3/cake-autorate.chunkedearly.log"
+
+# (b) cut inside the LAST field: 13 fields, but "90" is really "9000" truncated.
+# Field count alone cannot catch this one -- only the missing newline can.
+{
+	printf '%s\n' "$SUM_HEADER"
+	printf '%s\n' "$SUM_PRIMARY_OLD"
+	printf '%s\n' "$SUM_PRIMARY"
+	printf 'SUMMARY; 2026-07-23-10:00:01; 1753264801.5; 42000; 8000; 3; 1; 1200; 800; dl_high; ul_low; 45000; 90'
+} > "$logd3/cake-autorate.chunkedlate.log"
+
+# (c) freshly rotated: the live log holds only the header, the data is in .old.
+# Upstream rotates on log_file_max_time_mins whether or not the daemon has
+# anything to say, and it says nothing while it sleeps through an idle link.
+printf '%s\n' "$SUM_HEADER" > "$logd3/cake-autorate.rotated.log"
+{ printf '%s\n' "$SUM_HEADER"; printf '%s\n' "$SUM_PRIMARY_OLD"; } > "$logd3/cake-autorate.rotated.log.old"
+
+ce=$(CAKE_AUTORATE_LOG_DIR="$logd3" status_instance_json chunkedearly)
+[ "$(printf '%s' "$ce" | jq -r '.available')" = true ] \
+	&& ok "trailing fragment (3 fields) does not blank the status" \
+	|| fail "trailing fragment reported unavailable: $ce"
+[ "$(printf '%s' "$ce" | jq -r '.cake_dl_rate_kbps')" = 45000 ] \
+	&& ok "trailing fragment ignored, last COMPLETE SUMMARY used (45000)" \
+	|| fail "wrong line used: $(printf '%s' "$ce" | jq -r '.cake_dl_rate_kbps')"
+
+cl=$(CAKE_AUTORATE_LOG_DIR="$logd3" status_instance_json chunkedlate)
+[ "$(printf '%s' "$cl" | jq -r '.cake_ul_rate_kbps')" = 9000 ] \
+	&& ok "fragment cut inside the last field ignored (9000, not the truncated 90)" \
+	|| fail "truncated final field leaked through: $(printf '%s' "$cl" | jq -r '.cake_ul_rate_kbps')"
+
+ro=$(CAKE_AUTORATE_LOG_DIR="$logd3" status_instance_json rotated)
+[ "$(printf '%s' "$ro" | jq -r '.available')" = true ] \
+	&& ok "freshly rotated log falls back to .old instead of 'no data yet'" \
+	|| fail "rotated log reported unavailable: $ro"
+[ "$(printf '%s' "$ro" | jq -r '.cake_dl_rate_kbps')" = 20000 ] \
+	&& ok "rotated fallback reports the .old sample (20000)" \
+	|| fail "rotated fallback wrong: $(printf '%s' "$ro" | jq -r '.cake_dl_rate_kbps')"
+
+# newest_summary_line on a log with no complete SUMMARY at all prints nothing,
+# and a missing file is not an error.
+printf 'SUMMARY; 2026-07-23-10:00:01; 17532648' > "$logd3/frag-only.log"
+[ -z "$(newest_summary_line "$logd3/frag-only.log")" ] \
+	&& ok "a log holding only a fragment yields no line" || fail "fragment-only log yielded a line"
+[ -z "$(newest_summary_line "$logd3/nosuchfile.log")" ] \
+	&& ok "missing file yields no line" || fail "missing file yielded a line"
+
+# age_s: how stale the newest sample is, by the router's clock. The daemon stops
+# emitting SUMMARY lines while it sleeps, so the view needs to say so.
+nowts=$(date +%s)
+{
+	printf '%s\n' "$SUM_HEADER"
+	printf 'SUMMARY; 2026-07-23-10:00:00; %s.000000; 42000; 8000; 3; 1; 1200; 800; dl_high; ul_low; 45000; 9000\n' "$((nowts - 90))"
+} > "$logd3/cake-autorate.aged.log"
+ag=$(CAKE_AUTORATE_LOG_DIR="$logd3" status_instance_json aged)
+agev=$(printf '%s' "$ag" | jq -r '.age_s')
+[ "$(printf '%s' "$ag" | jq -r '.age_s | type')" = number ] \
+	&& ok "age_s is a JSON number" || fail "age_s not a number: $ag"
+[ "${agev:-0}" -ge 85 ] && [ "${agev:-0}" -le 150 ] \
+	&& ok "age_s reports a 90s-old sample as ~90s ($agev)" || fail "age_s wrong: $agev"
+
+# a sample stamped in the future (clock skew) must clamp to 0, never go negative
+{
+	printf '%s\n' "$SUM_HEADER"
+	printf 'SUMMARY; 2026-07-23-10:00:00; %s.000000; 42000; 8000; 3; 1; 1200; 800; dl_high; ul_low; 45000; 9000\n' "$((nowts + 600))"
+} > "$logd3/cake-autorate.future.log"
+fu=$(CAKE_AUTORATE_LOG_DIR="$logd3" status_instance_json future | jq -r '.age_s')
+[ "$fu" = 0 ] && ok "a future-stamped sample clamps age_s to 0" || fail "future sample age_s wrong: $fu"
+
+# ==========================================================================
+echo
 echo "== 4. sqm_interfaces: SQM-derived choices + mismatch detection"
 cat > "$tmp/sqm" <<'EOF'
 config queue 'eth1'

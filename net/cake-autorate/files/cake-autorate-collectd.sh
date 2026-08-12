@@ -72,6 +72,42 @@ instance_id_from_path() {
 	printf '%s' "$base"
 }
 
+# newest_summary_line <path> -- print the newest COMPLETE SUMMARY line in the
+# tail of <path>, or nothing.
+#
+# The daemon's log writer reads a fixed COUNT of characters off its log pipe
+# (`read -N ${log_file_buffer_size_B}` in cake-autorate.sh's maintain_log_file)
+# and writes the chunk verbatim, so a live log almost always ends mid-line:
+#
+#     SUMMARY; 2026-08-12-16:25:36; 17865663
+#
+# That fragment matches "^SUMMARY; " but has fewer than 13 fields, so taking the
+# last matching line and dropping it when short silently skipped most collection
+# intervals. Take the newest line that is both a SUMMARY and complete instead.
+#
+# A record counts as complete when another record follows it, or when it is the
+# last record AND the file ends on a newline -- which is what the one-byte probe
+# below detects (command substitution eats a trailing newline, so a file that
+# ends in "\n" gives the empty string). Kept identical to the rpcd status
+# backend, which reads the same log.
+newest_summary_line() {
+	nsl_file=$1
+	nsl_ends_nl=0
+	[ -f "$nsl_file" ] || return 0
+	[ -z "$(tail -c 1 "$nsl_file" 2>/dev/null)" ] && nsl_ends_nl=1
+	tail -n 1000 "$nsl_file" 2>/dev/null | awk -F'; ' -v ends_nl="$nsl_ends_nl" '
+		{
+			if (NR > 1 && ok) last = prev
+			ok = ($1 == "SUMMARY" && NF >= 13)
+			prev = $0
+		}
+		END {
+			if (ends_nl && ok) last = prev
+			if (last != "") print last
+		}
+	'
+}
+
 # emit_metrics <instance_id> <summary_line>
 # Parses one SUMMARY line and prints its PUTVAL lines. Non-SUMMARY input
 # (including the unprefixed SUMMARY_HEADER) and short/malformed lines print
@@ -122,10 +158,8 @@ process_file() {
 	# response, so `tail` first rather than grepping the whole file: the log can
 	# reach 100 MB and this runs every interval as `nobody`, possibly on a
 	# low-power router. The rpcd status path reads the same log the same way.
-	line=$(tail -n 1000 "$logf" 2>/dev/null | grep '^SUMMARY; ' | tail -n 1)
-	if [ -z "$line" ] && [ -f "$logf.old" ]; then
-		line=$(tail -n 1000 "$logf.old" 2>/dev/null | grep '^SUMMARY; ' | tail -n 1)
-	fi
+	line=$(newest_summary_line "$logf")
+	[ -n "$line" ] || line=$(newest_summary_line "$logf.old")
 	[ -n "$line" ] || return 0
 
 	emit_metrics "$inst" "$line"

@@ -19,9 +19,13 @@
 #                             egress_choices, dl_if <- ingress_choices, plus a
 #                             per-interface mismatch flag.
 #   status {instance?}        Per-instance live status parsed from the daemon log
-#                             /var/log/cake-autorate.<instance>.log. Uses the
-#                             same 13-field SUMMARY layout as the collectd exec
-#                             reader (docs/upstream-option-inventory.md 3.3).
+#                             /var/log/cake-autorate.<instance>.log, falling back
+#                             to <log>.old across a rotation. Uses the same
+#                             13-field SUMMARY layout as the collectd exec reader
+#                             (docs/upstream-option-inventory.md 3.3) and adds
+#                             age_s, how stale that sample is -- the daemon stops
+#                             logging entirely while it sleeps through an idle
+#                             link, so "not moving" is a normal state to report.
 #   service {action,instance?} start|stop|restart|reload the service via
 #                             /etc/init.d/cake-autorate.
 #
@@ -147,6 +151,55 @@ parse_summary_line() {
 }
 
 # --------------------------------------------------------------------------
+# newest_summary_line <file>
+#
+# Print the newest COMPLETE SUMMARY line in the tail of <file>, or nothing.
+#
+# "Complete" is the whole point. Upstream's log writer (cake-autorate.sh,
+# maintain_log_file) is:
+#
+#     read -r -N "${log_file_buffer_size_B}" -t ... -u "${log_fd}" log_chunk
+#     printf '%s' "${log_chunk}" >&${log_file_fd}
+#
+# -N reads a fixed COUNT OF CHARACTERS, not a line, so each flush ends the file
+# in the middle of whatever line it happened to reach. The last line of a live
+# log is therefore nearly always a fragment:
+#
+#     SUMMARY; 2026-08-12-16:25:36; 17865663
+#
+# A fragment still matches "^SUMMARY; ", so selecting the last matching line and
+# validating it afterwards reported "no data yet" on most polls even while the
+# daemon was writing ~20 SUMMARY lines a second (6 pingers / 0.3 s), which is
+# what made the status view flip between the table and the notice. Selecting the
+# newest line that actually parses fixes it.
+#
+# A record is treated as complete when another record follows it in the window,
+# or when it is the final record AND the file ends on a newline -- hence the
+# one-byte probe (command substitution strips the trailing newline, so a file
+# ending in "\n" yields the empty string).
+#
+# The window is the last 1000 lines, matching the collectd reader: enough to
+# still hold a SUMMARY when the other output_*_stats feeds are switched on and
+# interleaving their own lines, cheap enough to run every poll on a router.
+# --------------------------------------------------------------------------
+newest_summary_line() {
+	local f="$1" ends_nl=0
+	[ -f "$f" ] || return 0
+	[ -z "$(tail -c 1 "$f" 2>/dev/null)" ] && ends_nl=1
+	tail -n 1000 "$f" 2>/dev/null | awk -F'; ' -v ends_nl="$ends_nl" '
+		{
+			if (NR > 1 && ok) last = prev
+			ok = ($1 == "SUMMARY" && NF >= 13)
+			prev = $0
+		}
+		END {
+			if (ends_nl && ok) last = prev
+			if (last != "") print last
+		}
+	'
+}
+
+# --------------------------------------------------------------------------
 # status
 # --------------------------------------------------------------------------
 
@@ -187,7 +240,9 @@ status_instance_json() {
 	local cfgdir="${CAKE_AUTORATE_CONFIG_PREFIX:-/etc/cake-autorate}"
 	local log="$logdir/cake-autorate.$inst.log"
 	local cfg="$cfgdir/config.$inst.sh"
-	local line parsed run_json body
+	local line parsed run_json body mt now up epoch age_json
+
+	now=$(date +%s 2>/dev/null || echo '')
 
 	# Best-effort run state (device-only; the run dir exists only while running).
 	run_json='"running":false'
@@ -197,9 +252,7 @@ status_instance_json() {
 		# "running since the last apply". The run-dir mtime was used before, but
 		# it moves whenever the daemon adds or removes a state file under it, so
 		# the uptime jumped around on every poll.
-		local mt now up
 		mt=$(stat -c %Y "$cfg" 2>/dev/null || echo '')
-		now=$(date +%s 2>/dev/null || echo '')
 		if [ -n "$mt" ] && [ -n "$now" ] && [ "$now" -ge "$mt" ]; then
 			up=$((now - mt))
 			run_json="\"running\":true,\"uptime_s\":$up"
@@ -212,10 +265,17 @@ status_instance_json() {
 		printf '{"available":false,"reason":"no-log",%s}' "$run_json"
 		return 0
 	fi
-	# Never source the log; tail a fixed window and keep the newest real SUMMARY
-	# line. The header line cannot match "^SUMMARY; " because it starts with
-	# "SUMMARY_HEADER;".
-	line=$(tail -n 200 "$log" 2>/dev/null | grep '^SUMMARY; ' | tail -n1)
+	# Never source the log; tail a bounded window and keep the newest COMPLETE
+	# SUMMARY line (see newest_summary_line for why "complete" matters). The
+	# header line cannot be picked up either: it starts with "SUMMARY_HEADER;".
+	line=$(newest_summary_line "$log")
+	# Rotation window. Upstream copies the log to <log>.old and truncates the
+	# live file every log_file_max_time_mins (10 by default) whether or not the
+	# daemon has anything to say -- and it says nothing at all once the link has
+	# been idle for sustained_idle_sleep_thr_s and it puts the pingers to sleep.
+	# A freshly rotated log therefore holds only the *_HEADER lines, so fall back
+	# to .old exactly as the collectd reader does.
+	[ -n "$line" ] || line=$(newest_summary_line "$log.old")
 	if [ -z "$line" ]; then
 		printf '{"available":false,"reason":"no-data",%s}' "$run_json"
 		return 0
@@ -224,8 +284,24 @@ status_instance_json() {
 		printf '{"available":false,"reason":"no-data",%s}' "$run_json"
 		return 0
 	}
+
+	# age_s -- how old that sample is by the router's clock. The daemon stops
+	# emitting SUMMARY lines while it sleeps through an idle link, so a table
+	# that has stopped moving is normal; the view says how stale it is instead of
+	# presenting minutes-old numbers as live. Omitted if either clock is unusable.
+	age_json=''
+	epoch=$(printf '%s\n' "$parsed" | awk -F'\t' '$1 == "epoch" { print $2; exit }')
+	if [ -n "$now" ] && [ -n "$epoch" ]; then
+		age_json=$(awk -v n="$now" -v e="$epoch" 'BEGIN {
+			if (e !~ /^[0-9]+(\.[0-9]+)?$/) exit
+			d = n - e
+			if (d < 0) d = 0
+			printf ",\"age_s\":%d", d
+		}')
+	fi
+
 	body=$(printf '%s\n' "$parsed" | json_fields_body)
-	printf '{"available":true,%s,%s}' "$run_json" "$body"
+	printf '{"available":true,%s,%s%s}' "$run_json" "$body" "$age_json"
 }
 
 do_status() {
