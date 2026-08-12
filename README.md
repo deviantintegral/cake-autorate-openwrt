@@ -229,7 +229,8 @@ warning the base package's postinst logs when its reload did not take.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` defines a three-job pipeline on every push / PR —
+`.github/workflows/ci.yml` defines a four-job pipeline on every push / PR —
+**unit** (`tests/run-unit.sh`; no SDK, no VM, reports in under a minute),
 **build** (25.12.5 SDK, noarch, one build), **integration** (QEMU/KVM VM
 harness) and **ui** (Playwright functional + visual + review gallery) — pinned to
 25.12.5 throughout.

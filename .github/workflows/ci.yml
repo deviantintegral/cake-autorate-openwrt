@@ -1,7 +1,10 @@
 # cake-autorate OpenWrt package + LuCI UI — Continuous Integration
 #
-# One workflow, three jobs, all pinned to OpenWrt 25.12.5:
+# One workflow, four jobs, all pinned to OpenWrt 25.12.5:
 #
+#   unit        Every off-device suite, via `tests/run-unit.sh`. Needs no SDK, no
+#               .apk and no KVM, so it has NO `needs:` and reports in well under
+#               a minute — the fast signal the other three cannot give.
 #   build       Delegates to the reusable `build.yml`: 25.12.5 SDK, this repo as
 #               a `src-link` feed, both packages built ONCE (PKG_ARCH:=all /
 #               noarch, so there is NO per-arch matrix), .apk files uploaded as
@@ -55,6 +58,53 @@ env:
   APK_ARTIFACT: "cake-autorate-apks"
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # UNIT — every off-device suite: the shell suites under tests/*/ and the node
+  # suites under luci/luci-app-cake-autorate/tests/.
+  #
+  # These used to run nowhere. The suite list lived only in AGENTS.md prose, the
+  # two node suites were never in that list, and this workflow had no job for any
+  # of them — so a graph-definition bug reached a real router with every local
+  # suite green. `tests/run-unit.sh` now DISCOVERS suites by glob rather than
+  # naming them, and fails loudly rather than vacuously if it finds none, so a
+  # new test file cannot be silently orphaned again.
+  #
+  # Deliberately no `needs:` — it depends on nothing but the checkout, so it must
+  # not queue behind the ~10-minute SDK build to tell you a parser broke.
+  # ---------------------------------------------------------------------------
+  unit:
+    name: Unit suites (no VM)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The node suites (and the graph-definition checks, which load a LuCI class
+      # file) skip themselves when node is absent. CI must never take that path:
+      # a skip here would be an invisible loss of coverage, which is the exact
+      # failure this job exists to end.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Show what will run
+        run: ./tests/run-unit.sh --list
+
+      - name: Run unit suites
+        run: ./tests/run-unit.sh
+
+      - name: Unit summary
+        if: always()
+        run: |
+          {
+            echo "### Unit suites"
+            echo ""
+            echo '```'
+            ./tests/run-unit.sh --list
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # ---------------------------------------------------------------------------
   # BUILD — set up the pinned SDK, build the feed once, publish the .apk files.
   #

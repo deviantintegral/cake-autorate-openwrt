@@ -154,11 +154,10 @@ interface.
 ## Running the tests + CI
 
 ```sh
-# fast off-device unit suites (no VM)
-tests/bridge/test-bridge.sh ; tests/schema/test-uci-schema.sh
-tests/rpcd/test-rpcd.sh ; tests/service/test-init.sh
-tests/statistics/test-collectd-parser.sh ; tests/statistics/test-graph-definition.sh
-tests/regression/test-libuci-nounset.sh ; tests/regression/test-fping-sample-gate.sh
+# every fast off-device unit suite (no VM) -- run this before pushing
+./tests/run-unit.sh
+./tests/run-unit.sh --list      # what it found, without running it
+./tests/run-unit.sh --verbose   # output from passing suites too
 
 # VM integration harness (needs QEMU + /dev/kvm)
 ./tests/integration/run.sh              # PASS / exit 0
@@ -171,11 +170,22 @@ npx playwright test --project=visual
 npx playwright test --project=visual --update-snapshots   # refresh baselines
 ```
 
-CI (`.github/workflows/ci.yml`, pinned 25.12.5) runs three jobs on push/PR —
+CI (`.github/workflows/ci.yml`, pinned 25.12.5) runs four jobs on push/PR —
+**unit** (`tests/run-unit.sh`, no `needs:`, so it reports in under a minute),
 **build** (SDK, noarch, artifact `cake-autorate-apks`), **integration**
 (`integration-artifacts`) and **ui** (`ui-playwright-report`, `ui-gallery`).
-VM-backed steps skip **visibly** without `/dev/kvm`. See `docs/testing.md` for
-detail.
+VM-backed steps skip **visibly** without `/dev/kvm`. `release.yml` re-runs the
+unit suites in its `validate` gate, because a tag can point at a commit CI never
+saw green. See `docs/testing.md` for detail.
+
+**Never enumerate the unit suites anywhere.** `tests/run-unit.sh` discovers them
+(`tests/*/test-*.sh` and `luci/luci-app-cake-autorate/tests/*.test.js`) and
+aborts rather than passing vacuously if a glob matches nothing. A hand-kept list
+is how the two node suites went unrun by anyone for the life of the repo, and how
+a graph-definition bug reached a real router with every suite locally green. Add
+a test file in either location and it is picked up with no second place to
+update; if a new suite lives somewhere else, extend the runner's globs — do not
+add a line to a list.
 
 The build recipe lives in the reusable `.github/workflows/build.yml`; `ci.yml`
 and `release.yml` (on a `v*` tag) both call it. **Do not fork that recipe into a

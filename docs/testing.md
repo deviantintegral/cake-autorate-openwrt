@@ -1,20 +1,47 @@
 # Testing
 
-Two suites prove the feed works end to end, both pinned to **OpenWrt 25.12.5**
-and installing the built packages with **`apk`**:
+Three layers, all wired into `.github/workflows/ci.yml`:
 
-1. **VM integration harness** (`tests/integration/`) — boots a real OpenWrt VM,
+1. **Unit suites** (`tests/run-unit.sh`) — shell and node, no VM and no `.apk`.
+   Seconds to run; the layer you use while writing code.
+2. **VM integration harness** (`tests/integration/`) — boots a real OpenWrt VM,
    installs the `.apk`s, runs the service, induces load, and asserts the CAKE
    bandwidth actually moves.
-2. **Playwright UI suites** (`tests/ui/`) — drive the LuCI app in a browser
+3. **Playwright UI suites** (`tests/ui/`) — drive the LuCI app in a browser
    against the live LuCI the harness boots (functional + visual-regression).
 
-Both are wired into `.github/workflows/ci.yml`.
+Layers 2 and 3 are pinned to **OpenWrt 25.12.5** and install the built packages
+with **`apk`**.
 
-There are also fast off-device unit tests under `tests/bridge`, `tests/schema`,
-`tests/rpcd`, `tests/service`, `tests/statistics` and `tests/regression` (plain
-shell, no VM) that CI and contributors can run directly; the sections below cover
-the two VM-backed suites.
+## Unit suites
+
+```sh
+./tests/run-unit.sh              # everything; exits non-zero if any suite fails
+./tests/run-unit.sh --list       # what it found, without running it
+./tests/run-unit.sh --verbose    # output from passing suites too
+```
+
+The runner **discovers** suites rather than listing them:
+
+| Glob | Kind |
+| --- | --- |
+| `tests/*/test-*.sh` | plain shell — bridge, schema, rpcd, service, statistics, regression |
+| `luci/luci-app-cake-autorate/tests/*.test.js` | node — `options.js` and `live.js` logic |
+
+That is deliberate. The suites used to be enumerated in `AGENTS.md` prose and
+nowhere else, and prose does not fail when it goes stale: the two node suites
+were never on that list, CI had no job for any of it, and a graph-definition bug
+consequently shipped to a real router with every suite locally green. Drop a new
+file into either location and it runs — there is no list to update. If a glob
+ever matches nothing the runner **aborts** rather than reporting a vacuous pass.
+
+`tests/integration/` and `tests/ui/` are excluded by construction (the harness
+exposes `run.sh`, not `test-*.sh`, and the UI suites are driven by
+`playwright.config.js`); both need KVM and have their own jobs.
+
+Node is only needed for the node suites and for the graph-definition checks,
+which load the LuCI class file to compare it against the collectd reader. Without
+node those **skip with a NOTE**; CI installs node so they never skip there.
 
 ## Building the apks first
 
@@ -218,10 +245,11 @@ other, and commit the result alongside the doc change that needs it.
 ## Running in CI
 
 `.github/workflows/ci.yml` runs on every push / pull request, pinned to 25.12.5,
-with three jobs:
+with four jobs:
 
 | Job | What it does | Artifact(s) |
 | --- | --- | --- |
+| **unit** | No `needs:` — runs `tests/run-unit.sh` against the bare checkout (no SDK, no `.apk`, no KVM) and reports in under a minute. | — |
 | **build** | Sets up the 25.12.5 SDK, registers this repo as a `src-link` feed, builds both noarch packages **once** (no per-arch matrix). | `cake-autorate-apks` |
 | **integration** | `needs: build`; boots the VM harness against the downloaded apks — positive run **and** the `--negative` self-test. | `integration-artifacts` |
 | **ui** | `needs: build`; runs the functional + visual Playwright suites and publishes the review gallery. | `ui-playwright-report`, `ui-gallery` |
