@@ -92,16 +92,16 @@ jobs:
       # CI's `unit` job runs these on every PR, but a tag can be pushed at any
       # commit -- including one CI never saw green. They cost seconds and this
       # job is already the cheap gate ahead of the SDK build, so re-run them here
-      # rather than assume. node is set up for the same reason CI does it: the
-      # node suites skip themselves without it, and a silent skip in the release
-      # gate is worse than no gate.
+      # rather than assume. node is set up for the same reason CI does it, and
+      # `--no-skip` makes a skipped suite fatal: a silent skip in the gate that
+      # decides what gets published is worse than no gate at all.
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
 
       - name: Run unit suites
-        run: ./tests/run-unit.sh
+        run: ./tests/run-unit.sh --no-skip
 
   # Same recipe as CI. Checkout inside the reusable workflow resolves to the
   # tag, so this builds the tagged tree, not main.

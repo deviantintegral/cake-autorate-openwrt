@@ -59,8 +59,17 @@ for f in "$DEFINITION" "$READER"; do
 done
 
 if ! command -v node >/dev/null 2>&1; then
+	# UNIT_NO_SKIP is exported by tests/run-unit.sh --no-skip, which CI and the
+	# release gate pass. There node is installed on purpose, so a skip means the
+	# setup step quietly failed -- and a self-skip that still exits 0 would hand
+	# back a green pass over checks that never ran. Refuse to be that.
+	if [ "${UNIT_NO_SKIP:-0}" = "1" ]; then
+		printf 'FAIL: node not found, and UNIT_NO_SKIP=1 forbids skipping.\n' >&2
+		exit 1
+	fi
 	printf 'NOTE: node not found -- graph definition checks skipped.\n'
-	printf '      CI runs node for the Playwright job; install it to run these.\n'
+	printf '      Install node (CI does) to run them; run-unit.sh --no-skip makes\n'
+	printf '      this an error rather than a skip.\n'
 	exit 0
 fi
 

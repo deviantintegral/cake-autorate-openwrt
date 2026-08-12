@@ -31,6 +31,15 @@
 #   tests/run-unit.sh              run everything
 #   tests/run-unit.sh --list       print what would run, run nothing
 #   tests/run-unit.sh --verbose    show output from passing suites too
+#   tests/run-unit.sh --no-skip    treat a skipped suite as a failure (CI)
+#
+# ON --no-skip
+#   The node suites skip themselves when node is absent, which is right on a
+#   build host that has not installed it and wrong everywhere automated. CI and
+#   the release gate install node ON PURPOSE, so if a suite skips there, the
+#   setup step has quietly failed and the job would otherwise report a green
+#   pass over coverage it never ran -- the exact invisible-loss failure this
+#   runner exists to end. --no-skip makes that fatal instead.
 
 set -u
 
@@ -40,11 +49,13 @@ cd "$REPO_ROOT" || exit 1
 
 LIST_ONLY=0
 VERBOSE=0
+NO_SKIP=0
 for arg in "$@"; do
 	case "$arg" in
 		--list)    LIST_ONLY=1 ;;
 		--verbose) VERBOSE=1 ;;
-		-h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		--no-skip) NO_SKIP=1 ;;
+		-h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*)         printf 'unknown argument: %s (try --help)\n' "$arg" >&2; exit 2 ;;
 	esac
 done
@@ -79,6 +90,12 @@ fi
 
 HAVE_NODE=0
 command -v node >/dev/null 2>&1 && HAVE_NODE=1
+
+# Shell suites are invoked as `sh <file>` with no arguments, so --no-skip
+# reaches the ones that self-skip (test-graph-definition.sh needs node too)
+# through the environment rather than a flag.
+UNIT_NO_SKIP="$NO_SKIP"
+export UNIT_NO_SKIP
 
 if [ "$LIST_ONLY" -eq 1 ]; then
 	printf 'shell suites:\n'
@@ -127,6 +144,10 @@ done
 for s in $NODE_SUITES; do
 	if [ "$HAVE_NODE" -eq 1 ]; then
 		run_suite "$s" node "$s"
+	elif [ "$NO_SKIP" -eq 1 ]; then
+		printf '%-62sFAIL (node not installed, --no-skip)\n' "$s"
+		FAILED=$((FAILED + 1))
+		FAILED_NAMES="$FAILED_NAMES $s"
 	else
 		printf '%-62sSKIP (node not installed)\n' "$s"
 		SKIPPED=$((SKIPPED + 1))
@@ -138,7 +159,7 @@ done
 printf '\n'
 if [ "$SKIPPED" -gt 0 ]; then
 	printf 'NOTE: %d node suite(s) skipped -- install node to run them.\n' "$SKIPPED"
-	printf '      CI installs node, so they are never skipped there.\n\n'
+	printf '      CI passes --no-skip, so a skip is a failure there.\n\n'
 fi
 
 if [ "$FAILED" -eq 0 ]; then
