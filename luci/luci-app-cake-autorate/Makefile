@@ -33,7 +33,7 @@ LUCI_PKGARCH:=all
 # package started as. v0.2.1 renumbered it DOWN to match the tag, so anyone who
 # installed 1.0.0-r1 must `apk del luci-app-cake-autorate` before installing:
 # apk will not walk a version backwards.
-PKG_VERSION:=0.2.2
+PKG_VERSION:=0.2.3
 PKG_RELEASE:=1
 PKG_MAINTAINER:=Andrew Berry <andrew@furrypaws.ca>
 PKG_LICENSE:=GPL-2.0-or-later
