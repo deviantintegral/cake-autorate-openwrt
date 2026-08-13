@@ -153,18 +153,31 @@ parsers):
   script that runs `set -u` and sources it must wrap the `config_load`/
   `config_foreach` block in `set +u` (the bridge and the rpcd backend both do).
   Regression covered by `tests/regression/test-libuci-nounset.sh`.
-- **We carry one upstream patch, and it is temporary.**
-  `patches/010-reject-malformed-fping-samples.patch` makes the daemon's fping
-  arm check the two fields it does arithmetic on before trusting a sample.
-  Upstream accepts any line of 12 whitespace fields, so one malformed sample
-  reaches `printf %.3f` / `10#${...}` and, under the daemon's `set -u`, exits the
-  process — **cleanly**, so procd never respawns it and the WAN runs unshaped
-  with nothing but three lines in `logread` to say so. Upstream fixed half of
-  this in PR #392, which is merged to master but **in no release**: v3.2.2 is
-  still the newest tag, which is why it is carried here rather than picked up by
-  a version bump. Drop the patch on the upstream bump that first ships #392 —
-  `tests/regression/test-fping-sample-gate.sh` fails the moment `PKG_VERSION`
-  moves, so the bump PR cannot land without that decision being made.
+- **The daemon's IPC pipe is unframed, and a torn write is fatal.** Every
+  producer writes into ONE anonymous pipe (`main_fd`): the achieved-rate monitor
+  emits `SARS <dl> <ul>`, the pinger writes its reply lines to the same
+  descriptor. Nothing frames them, so their bytes interleave and the main loop
+  reads back a record built from both — with a field count that still passes
+  upstream's only check. Whatever such a record carries then reaches `((...))`
+  or `printf %.3f`, and **either way the daemon dies**: under `set -u` an
+  unbound variable exits it cleanly (procd does not respawn — the WAN just runs
+  unshaped), and anything that merely writes to stderr is caught by
+  `intercept_stderr()`, which answers every stderr line with `kill $$` (procd
+  does respawn — the router logs a crash loop). So **anything read off that pipe
+  must be validated before it is used in arithmetic.**
+- **We carry two upstream patches, and both are temporary.** They are the two
+  halves of the above, each gating the fields its arm does arithmetic on:
+  `patches/010-reject-malformed-fping-samples.patch` (pinger arm; reported as
+  `printf: bytes: invalid number` then a clean exit) and
+  `patches/020-reject-malformed-sars-records.patch` (achieved-rate arm; reported
+  as `((: 390[1786630033.55848]: arithmetic syntax error` then a crash loop).
+  Neither fixes the interleaving — they stop it being fatal. Upstream fixed a
+  sibling of the first in PR #392, merged to master but **in no release**
+  (v3.2.2 is still the newest tag); the SARS arm is unfixed even on master at
+  3.3.0-PRERELEASE. Drop each patch on the upstream bump that first ships a fix
+  for it — `tests/regression/test-fping-sample-gate.sh` and
+  `tests/regression/test-sars-record-gate.sh` both fail the moment `PKG_VERSION`
+  moves, so a bump PR cannot land without that decision being made.
 
 ## Running the tests + CI
 

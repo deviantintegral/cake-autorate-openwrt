@@ -35,11 +35,12 @@ PKG_HASH:=892d8e648f6b3705f31799736e697874da3802b5e56ce4aea257cfdf6a376414
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 
 # ./patches/ is applied to the extracted tarball by package.mk's default
-# Build/Patch -- there is one, and it is meant to go away. See AGENTS.md
-# ("We carry one upstream patch") and the patch's own header: it hardens the
-# fping sample parser against a malformed line that otherwise kills the daemon
-# outright. A patch that stops applying fails this build loudly, which is the
-# intended prompt to re-check it on an upstream bump.
+# Build/Patch -- there are two, and both are meant to go away. See AGENTS.md
+# ("We carry two upstream patches") and each patch's own header: they harden
+# the two parsers that read the daemon's one shared IPC pipe against a torn
+# write, which otherwise kills the daemon outright. A patch that stops applying
+# fails this build loudly, which is the intended prompt to re-check it on an
+# upstream bump.
 
 PKG_MAINTAINER:=Andrew Berry <andrew@furrypaws.ca>
 PKG_LICENSE:=GPL-2.0-or-later

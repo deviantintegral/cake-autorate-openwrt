@@ -1,0 +1,70 @@
+From: Andrew Berry <andrew@furrypaws.ca>
+Subject: achieved-rate parser: reject a record whose rates are not numbers
+
+The sibling of 010-reject-malformed-fping-samples.patch, on the other side of
+the same shared pipe. ${main_fd} carries two unframed streams -- the
+achieved-rate monitor's `SARS <dl> <ul>` and the pinger's reply lines -- so a
+torn write can splice one onto the other. 010 hardened the pinger arm, where a
+frankenline left the word `bytes` in the rtt field. This is the mirror image:
+the splice landed in the SARS arm instead, and the record still had exactly
+three fields, so upstream's field-count gate waved it through.
+
+Reported against v3.2.2 with pinger_binary=fping:
+
+    ERROR: 1786630033.560756 /usr/lib/cake-autorate/cake-autorate.sh: line 1191:
+    ((: 390[1786630033.55848]: arithmetic syntax error: invalid arithmetic
+    operator (error token is "[1786630033.55848]")
+
+`390` is an upload rate in kbps; `[1786630033.55848]` is an fping `--timestamp`
+prefix (fping prints five decimals) welded onto it. The fused value was stored
+into achieved_rate_kbps[ul] and reached the `((...))` load comparison on line
+1191, which cannot parse it.
+
+The failure mode is NOT 010's. There the abort is a clean exit that procd does
+not respawn. Here bash writes a diagnostic to stderr, and upstream's
+intercept_stderr() answers ANY stderr line with `log_msg ERROR` followed by
+`kill $$` -- so the daemon dies, procd respawns it, and the router logs a crash
+loop rather than a silent stop:
+
+    Stopped cake-autorate with PID: 25821 and config: /etc/cake-autorate/config.primary.sh
+    procd: Instance cake-autorate::primary s in a crash loop 7 crashes, 78 seconds since last crash
+
+So gate the two fields the arithmetic consumes, in the same style as 010, and
+drop the record when either is not a plain integer. A rate sample is
+disposable: monitor_achieved_rates emits the next one within
+monitor_achieved_rates_interval_ms.
+
+Neither this nor 010 fixes the underlying interleaving -- the pipe is still
+shared and unframed -- they stop it from being fatal. Upstream is unfixed in
+v3.2.2 (still the newest tag) and in master at 3.3.0-PRERELEASE: the SARS arm
+is byte-identical there, and intercept_stderr still calls kill $$. Drop this
+patch on the upstream bump that first ships a fix for it.
+
+--- a/cake-autorate.sh
++++ b/cake-autorate.sh
+@@ -1165,7 +1165,24 @@
+
+ 		# Set download and upload achieved rates
+ 		SARS)
+-			if ((${#command[@]} == 3))
++			# Upstream trusts every 3-field line the fifo yields. That is not
++			# safe: ${main_fd} is shared by the achieved-rate monitor and the
++			# pinger, and a torn write can splice a pinger timestamp onto a rate
++			# while leaving the field COUNT at 3, which is all this gate checks.
++			# Both fields then land in achieved_rate_kbps and are compared with
++			# ((...)) a few lines below, where a non-numeric token is a bash
++			# error -- and intercept_stderr turns any stderr line into kill $$.
++			#
++			# Glob class checks, not [[ =~ ]], matching the fping gate in the
++			# pinger arm: an ERE recompiles on every record. -n as well as the
++			# class, because an empty field passes *[!0-9]* and would make the
++			# comparison a bare (( > thr )). A rejected record is dropped,
++			# silently and with no new control flow: the next one is along within
++			# monitor_achieved_rates_interval_ms, and the stale rates it leaves
++			# in place are the ones the load logic already had.
++			if ((${#command[@]} == 3)) &&
++				[[ -n ${command[1]} && ${command[1]} != *[!0-9]* ]] &&
++				[[ -n ${command[2]} && ${command[2]} != *[!0-9]* ]]
+ 			then
+ 				achieved_rate_kbps[dl]=${command[1]} achieved_rate_kbps[ul]=${command[2]} achieved_rate_updated[dl]=1 achieved_rate_updated[ul]=1
+
