@@ -86,6 +86,37 @@ test('sampleAgeSuffix: no age from the backend -> no suffix', function () {
 	assert.strictEqual(mod.sampleAgeSuffix('nonsense'), '');
 });
 
+/* ---- loadCondition --------------------------------------------------------
+ * The raw token is "<dir>_<level>" with an optional "_bb" bufferbloat suffix.
+ * The view turns { key, bb } into a label + badge colour, so getting the split
+ * wrong silently mislabels the one state a user is watching for. */
+test('loadCondition: the three levels, either direction', function () {
+	assert.deepStrictEqual(mod.loadCondition('dl_idle'), { key: 'idle', bb: false, raw: 'dl_idle' });
+	assert.deepStrictEqual(mod.loadCondition('ul_low'), { key: 'low', bb: false, raw: 'ul_low' });
+	assert.deepStrictEqual(mod.loadCondition('dl_high'), { key: 'high', bb: false, raw: 'dl_high' });
+});
+
+test('loadCondition: the _bb suffix flags bufferbloat, level survives', function () {
+	assert.deepStrictEqual(mod.loadCondition('dl_high_bb'), { key: 'high', bb: true, raw: 'dl_high_bb' });
+	assert.deepStrictEqual(mod.loadCondition('ul_idle_bb'), { key: 'idle', bb: true, raw: 'ul_idle_bb' });
+	assert.deepStrictEqual(mod.loadCondition('UL_LOW_BB'), { key: 'low', bb: true, raw: 'UL_LOW_BB' });
+});
+
+test('loadCondition: missing token -> nothing to show', function () {
+	assert.deepStrictEqual(mod.loadCondition(null), { key: null, bb: false, raw: null });
+	assert.deepStrictEqual(mod.loadCondition(''), { key: null, bb: false, raw: null });
+	assert.deepStrictEqual(mod.loadCondition(undefined), { key: null, bb: false, raw: null });
+});
+
+test('loadCondition: an unknown level keeps raw so the view can show it', function () {
+	const r = mod.loadCondition('dl_wat');
+	assert.strictEqual(r.key, null);
+	assert.strictEqual(r.bb, false);
+	assert.strictEqual(r.raw, 'dl_wat');
+	/* Unknown level, but the bufferbloat flag is still readable. */
+	assert.deepStrictEqual(mod.loadCondition('dl_wat_bb'), { key: null, bb: true, raw: 'dl_wat_bb' });
+});
+
 /* ---- statusRow / statusRows --------------------------------------------- */
 test('statusRow: available instance normalizes all summary fields', function () {
 	const r = mod.statusRow('wan', {

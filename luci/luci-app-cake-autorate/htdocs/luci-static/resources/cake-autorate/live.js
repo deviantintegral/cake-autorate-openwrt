@@ -92,6 +92,38 @@ function formatUptime(s) {
 }
 
 /*
+ * loadCondition(v) -- split a raw SUMMARY load-condition token into something
+ * the view can label and colour. The daemon emits "<dir>_<level>" with an
+ * optional "_bb" suffix on a bufferbloat event: dl_idle, ul_low, dl_high_bb ...
+ * That is the same vocabulary the collectd reader maps to a numeric gauge, so
+ * keep the two in step (net/cake-autorate/files/cake-autorate-collectd.sh).
+ *
+ * Returns { key, bb, raw }:
+ *   key -- 'idle' | 'low' | 'high', or null when the token is absent or is not
+ *          one of the three known levels. The view owns the _() label text; this
+ *          file stays free of LuCI runtime calls.
+ *   bb  -- true when the bufferbloat suffix is present.
+ *   raw -- the original token (null when absent), so an unrecognised value can
+ *          still be shown verbatim rather than swallowed.
+ */
+function loadCondition(v) {
+	var raw = toStr(v);
+	if (raw == null)
+		return { key: null, bb: false, raw: null };
+
+	var s = raw.toLowerCase().replace(/^(dl|ul)_/, '');
+	var bb = /_bb$/.test(s);
+	if (bb)
+		s = s.replace(/_bb$/, '');
+
+	return {
+		key: (s === 'idle' || s === 'low' || s === 'high') ? s : null,
+		bb: bb,
+		raw: raw
+	};
+}
+
+/*
  * How old a sample may be before the view calls it out. The daemon emits a
  * SUMMARY per ping response (six pingers every 0.3 s by default), so a feed more
  * than a few seconds behind is not live: it sleeps through an idle link
@@ -217,6 +249,7 @@ return baseclass.extend({
 	STALE_AFTER_S: STALE_AFTER_S,
 	formatUptime: formatUptime,
 	sampleAgeSuffix: sampleAgeSuffix,
+	loadCondition: loadCondition,
 	statusRow: statusRow,
 	statusRows: statusRows,
 	interfaceChoices: interfaceChoices,
