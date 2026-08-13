@@ -170,7 +170,9 @@ parsers):
   `patches/010-reject-malformed-fping-samples.patch` (pinger arm; reported as
   `printf: bytes: invalid number` then a clean exit) and
   `patches/020-reject-malformed-sars-records.patch` (achieved-rate arm; reported
-  as `((: 390[1786630033.55848]: arithmetic syntax error` then a crash loop).
+  as `((: 390[1786630033.55848]: arithmetic syntax error` then a crash loop —
+  seven of them in three hours, on both the dl and the ul field, which is why
+  the gate checks both).
   Neither fixes the interleaving — they stop it being fatal. Upstream fixed a
   sibling of the first in PR #392, merged to master but **in no release**
   (v3.2.2 is still the newest tag); the SARS arm is unfixed even on master at

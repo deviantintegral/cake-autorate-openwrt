@@ -6,9 +6,11 @@
 # pinger, so a torn write splices one stream into the other. 010 hardened the
 # pinger arm. Reported from a live router on v3.2.2 with pinger_binary=fping,
 # the splice landed in the SARS arm instead -- an fping `--timestamp` prefix
-# welded onto an upload rate, with the field count still 3, which is all
-# upstream's gate checks:
+# welded onto a rate, with the field count still 3, which is all upstream's gate
+# checks. Seven crashes in three hours, every one of them this, hitting both
+# halves of the same comparison -- the dl rate on line 1181, the ul rate on 1191:
 #
+#     line 1181: ((: 0[1786626254.60005]: arithmetic syntax error
 #     line 1191: ((: 390[1786630033.55848]: arithmetic syntax error
 #
 # And where 010's failure mode is a clean exit procd does not respawn, this one
@@ -98,13 +100,14 @@ check accept "typical load record"    'SARS 20000 7500'
 check accept "idle link, both zero"   'SARS 0 0'
 check accept "asymmetric rates"       'SARS 943210 390'
 
-# --- the shape that killed the daemon --------------------------------------
-# The reported record: an fping --timestamp prefix spliced onto the ul rate,
-# field count still 3, so the count check alone passes it straight through to
-# the (( )) comparison on line 1191.
+# --- the shapes that killed the daemon -------------------------------------
+# Both reported records, verbatim. The field count is 3 either way, so the count
+# check alone passes them straight through to the (( )) comparisons -- line 1191
+# for the ul rate, line 1181 for the dl rate. The reporting router hit the dl
+# half five times and the ul half twice, which is why both fields are gated:
+# the splice lands at no fixed offset in the record.
 check reject "fping ts on ul rate"    'SARS 12000 390[1786630033.55848]'
-# The same splice landing one field earlier.
-check reject "fping ts on dl rate"    'SARS 12000[1786630033.55848] 390'
+check reject "fping ts on dl rate"    'SARS 0[1786626254.60005] 459'
 # A torn write can leave the fragment in front of the value just as easily.
 check reject "ts prefixed to a rate"  'SARS [1786630033.55848]12000 390'
 # Three fields, one of them empty -- IFS holds a comma as well as a space, so

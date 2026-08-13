@@ -20,6 +20,15 @@ prefix (fping prints five decimals) welded onto it. The fused value was stored
 into achieved_rate_kbps[ul] and reached the `((...))` load comparison on line
 1191, which cannot parse it.
 
+BOTH fields are reachable, so both are gated. Seven crashes over three hours on
+the reporting router were this one error and nothing else, split across the two
+halves of the same comparison: line 1191 with `459[...]` / `390[...]` (the ul
+rate, command[2]) and line 1181 with `0[...]` five times over (the dl rate,
+command[1]). The splice therefore lands at no fixed offset in the record -- it
+is a torn write, not a parser quirk -- and the fused timestamp is consistently
+~2.3 ms older than the abort, i.e. the pinger line it came from was still in
+flight when the record was read.
+
 The failure mode is NOT 010's. There the abort is a clean exit that procd does
 not respawn. Here bash writes a diagnostic to stderr, and upstream's
 intercept_stderr() answers ANY stderr line with `log_msg ERROR` followed by
