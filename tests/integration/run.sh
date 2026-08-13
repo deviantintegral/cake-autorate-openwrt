@@ -101,6 +101,31 @@ if [ "$(id -u)" != 0 ] && [ -r /proc/sys/net/ipv4/ping_group_range ]; then
 	fi
 fi
 
+# ---- socket-path-length gate ----------------------------------------------
+# QEMU's serial and QMP sockets are UNIX domain sockets inside $ART, and a
+# sockaddr_un holds at most 108 bytes of path (including the NUL) -- a kernel
+# ABI constant, not a QEMU limit. Overrun it and qemu exits IMMEDIATELY with
+# "UNIX socket path '...' is too long", which the driver cannot show you: it
+# starts qemu with stderr folded into a DEVNULL stdout, so the whole run reports
+# only "qemu exited early (rc=1)".
+#
+# This is not exotic. $ART sits beside this script, so the budget is spent by
+# wherever the tree was checked out, and a git worktree under
+# .claude/worktrees/<name>/ adds ~40 bytes over the plain checkout -- enough to
+# push a normally-fine path over on its own. Measure serial.sock, the longer of
+# the two names, and say which part is too long.
+SERIAL_SOCK="$ART/serial.sock"
+if [ "${#SERIAL_SOCK}" -ge 108 ]; then
+	echo "ERROR: the QEMU serial socket path is ${#SERIAL_SOCK} bytes:" >&2
+	echo "         $SERIAL_SOCK" >&2
+	echo "       A UNIX socket path must be under 108 bytes (sockaddr_un.sun_path)," >&2
+	echo "       so qemu would exit at once with 'UNIX socket path is too long'." >&2
+	echo "       Run the harness from a shorter path -- the sockets live beside" >&2
+	echo "       this script, so a checkout nearer \$HOME (or a git worktree" >&2
+	echo "       outside .claude/worktrees/) is enough." >&2
+	exit 3
+fi
+
 # ---- locate build tools ---------------------------------------------------
 PATH="$PATH:/usr/sbin:/sbin"
 MKFS_EXT4=$(command -v mkfs.ext4 || echo /usr/sbin/mkfs.ext4)

@@ -139,6 +139,8 @@ Written to `tests/integration/artifacts/` (gitignored):
 
 - `harness.log` — full transcript of every guest command + rc;
 - `serial.log` — raw serial console (boot log included);
+- `qemu.log` — QEMU's own stderr, which is where a refusal to start says why
+  (the driver quotes its tail into the error rather than reporting a bare rc);
 - `RESULT.txt` — verdict + per-assertion PASS/FAIL;
 - `tc-before.txt` / `tc-under-load.txt` / `tc-after.txt` — `tc -s qdisc` snapshots;
 - `ubus-service-list.txt`, `rpcd-status.txt`, `collectd-rrds.txt`,
