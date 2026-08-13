@@ -31,6 +31,12 @@ class VM:
         self.serial_path = os.path.join(workdir, "serial.sock")
         self.qmp_path = os.path.join(workdir, "qmp.sock")
         self.serial_log = os.path.join(workdir, "serial.log")
+        # qemu's OWN stderr, kept apart from the guest's serial output. Anything
+        # that kills qemu before the guest exists (a bad -drive, an unusable
+        # accelerator, an over-long socket path) is reported here and nowhere
+        # else, so start() can quote it instead of surfacing a bare exit code.
+        self.qemu_log = os.path.join(workdir, "qemu.log")
+        self._qemu_errf = None
         self.proc = None
         self.sock = None
         self._buf = b""
@@ -70,8 +76,13 @@ class VM:
         if extra_qemu_args:
             args += extra_qemu_args
         self._log("BOOT: %s" % " ".join(args))
+        # stderr to its own file, NOT to a DEVNULL stdout: folding the two
+        # together threw away every message qemu emits when it refuses to start,
+        # leaving "qemu exited early (rc=1)" as the only evidence of a failure
+        # qemu had already described in one line.
+        self._qemu_errf = open(self.qemu_log, "wb")
         self.proc = subprocess.Popen(
-            args, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+            args, stdout=subprocess.DEVNULL, stderr=self._qemu_errf)
         # connect to serial socket (qemu creates it async)
         deadline = time.time() + 30
         while time.time() < deadline:
@@ -83,11 +94,27 @@ class VM:
                 break
             except (FileNotFoundError, ConnectionRefusedError, OSError):
                 if self.proc.poll() is not None:
-                    raise VMError("qemu exited early (rc=%s)" % self.proc.returncode)
+                    raise VMError("qemu exited early (rc=%s)%s"
+                                  % (self.proc.returncode, self._qemu_stderr()))
                 time.sleep(0.2)
         if self.sock is None:
-            raise VMError("could not connect to serial socket")
+            raise VMError("could not connect to serial socket%s"
+                          % self._qemu_stderr())
         return self
+
+    def _qemu_stderr(self, limit=5):
+        """The tail of qemu's stderr, formatted for a VMError message ("" when
+        it said nothing). Flushed first -- the failure and the read race."""
+        try:
+            if self._qemu_errf is not None:
+                self._qemu_errf.flush()
+            with open(self.qemu_log, "r", errors="replace") as f:
+                lines = [ln.rstrip() for ln in f if ln.strip()]
+        except OSError:
+            return ""
+        if not lines:
+            return ""
+        return " -- qemu said: " + " | ".join(lines[-limit:])
 
     _ssh_port = None
 
@@ -110,6 +137,9 @@ class VM:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
         self._logf.close()
+        if self._qemu_errf is not None:
+            self._qemu_errf.close()
+            self._qemu_errf = None
 
     # ---- low level I/O -------------------------------------------------
     def _log(self, msg):

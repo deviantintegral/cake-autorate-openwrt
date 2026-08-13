@@ -104,6 +104,16 @@ setup.
 Everything is pinned to **OpenWrt 25.12.5**. Build the two noarch packages with
 the release SDK — no full buildroot needed.
 
+The SDK compiles host tools, so a bare system needs the usual build chain first
+(Debian/Ubuntu; this is the list CI installs):
+
+```sh
+sudo apt-get install -y --no-install-recommends \
+  build-essential clang flex bison g++ gawk gcc-multilib gettext git \
+  libncurses-dev libssl-dev python3 python3-setuptools rsync unzip \
+  zlib1g-dev file wget zstd
+```
+
 ```sh
 # 1. Fetch + extract the pinned SDK (x86-64 shown; any target works, noarch).
 SDK=openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64
@@ -140,7 +150,15 @@ echo "src-link cakeautorate /path/to/cake-autorate-openwrt" >> feeds.conf
 } > .config
 make defconfig
 
-# 4. Compile each package.
+# 4. Build luci-base's host tools FIRST. luci.mk minifies every shipped .js
+#    with `if jsmin < f > f.o; then mv f.o f; fi`, and jsmin comes from
+#    luci-base/host. Skip this and that line fails SILENTLY -- the build still
+#    exits 0, but the LuCI app ships unminified JS alongside stray zero-byte
+#    .js.o files, and is ~66% larger installed (62878 vs 37781 bytes).
+make package/luci-base/host/compile
+test -x staging_dir/hostpkg/bin/jsmin || echo "jsmin missing -- see above"
+
+# 5. Compile each package.
 make package/cake-autorate/compile V=s
 make package/luci-app-cake-autorate/compile V=s
 ```
