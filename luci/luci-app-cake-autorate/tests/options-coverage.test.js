@@ -37,12 +37,19 @@ function loadModule() {
 	return factory(undefined, undefined, undefined, stubBase);
 }
 
-function tsvOptionNames() {
+/* Data rows of the schema TSV, split into their 10 columns:
+ * uci_option, upstream_option, type, uci_default, upstream_default, managed,
+ * direction, group, essential, units_range. */
+function tsvRows() {
 	return fs.readFileSync(tsvPath, 'utf8')
 		.split('\n')
 		.filter(function (l) { return l && l[0] !== '#'; })
-		.map(function (l) { return l.split('\t')[0]; })
-		.filter(Boolean);
+		.map(function (l) { return l.split('\t'); })
+		.filter(function (cols) { return cols[0]; });
+}
+
+function tsvOptionNames() {
+	return tsvRows().map(function (cols) { return cols[0]; });
 }
 
 let passed = 0;
@@ -130,6 +137,42 @@ test('OPTIONS names are exactly the 66 names in uci-option-schema.tsv', function
 	assert.strictEqual(fromView.length, 66);
 	assert.strictEqual(fromTsv.length, 66);
 	assert.deepStrictEqual(fromView, fromTsv);
+});
+
+/*
+ * Every bool must declare `def`, and it must equal the TSV's uci_default.
+ *
+ * The view feeds `def` to form.Flag's `default`, and a Flag is only safe to
+ * save when that default is right: LuCI deletes an option whose checkbox
+ * matches the default, and a deleted option means "whatever the daemon's own
+ * defaults.sh says". Get it wrong for an option upstream defaults to 1
+ * (adjust_dl_shaper_rate, debug, enable_sleep_function, randomize_reflectors,
+ * log_file_export_compress) and unchecking the box leaves the feature running.
+ */
+test('every bool option declares def, matching uci_default in the TSV', function () {
+	const tsvDefaults = tsvRows().reduce(function (acc, cols) {
+		if (cols[2] === 'bool')
+			acc[cols[0]] = Number(cols[3]);
+		return acc;
+	}, {});
+
+	const bools = mod.OPTIONS.filter(function (o) { return o.type === 'bool'; });
+	assert.strictEqual(bools.length, 14, 'expected 14 bool options');
+
+	bools.forEach(function (o) {
+		assert.ok(o.def === 0 || o.def === 1,
+			o.name + ': def must be 0 or 1, got ' + JSON.stringify(o.def));
+		assert.strictEqual(o.def, tsvDefaults[o.name],
+			o.name + ': def disagrees with uci_default in uci-option-schema.tsv');
+	});
+
+	/* Spot-check the ones a wrong default silently inverts. */
+	const byName = {};
+	bools.forEach(function (o) { byName[o.name] = o; });
+	['adjust_dl_shaper_rate', 'adjust_ul_shaper_rate', 'enable_sleep_function',
+	 'randomize_reflectors', 'log_file_export_compress'].forEach(function (n) {
+		assert.strictEqual(byName[n].def, 1, n + ' is on by default');
+	});
 });
 
 /* --- checkRateOrder: the min <= base <= max rule the Essentials help states -- */

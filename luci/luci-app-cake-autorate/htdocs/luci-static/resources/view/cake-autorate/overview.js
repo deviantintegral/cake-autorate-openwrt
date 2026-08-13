@@ -316,6 +316,17 @@ return view.extend({
 
 			if (opt.type === 'bool') {
 				o = s.taboption(opt.group, form.Flag, opt.name, title, descr);
+				/* A checkbox has no "unset" state to show, so an omitted bool
+				 * has to mean something, and for the daemon it means "use my
+				 * built-in value" -- which for adjust_dl_shaper_rate, debug,
+				 * enable_sleep_function and friends is 1. LuCI's Flag drops an
+				 * option whenever it equals o.default and rmempty is on, so
+				 * with the stock default of '0' unchecking one of those boxes
+				 * deleted the option and the daemon silently kept the feature
+				 * ON while the form showed it off. Pin the packaged default so
+				 * a fresh instance renders correctly, and keep rmempty off so
+				 * the saved config always states 0 or 1 outright. */
+				o.default = opt.def ? '1' : '0';
 			}
 			else if (opt.type === 'list') {
 				o = s.taboption(opt.group, form.DynamicList, opt.name, title, descr);
@@ -332,8 +343,10 @@ return view.extend({
 			}
 
 			/* String options whose upstream default is empty may be blanked;
-			 * everything else keeps its packaged/upstream default when omitted. */
-			o.rmempty = true;
+			 * everything else keeps its packaged/upstream default when omitted.
+			 * Bools opt out: an omitted bool would be read as the daemon's own
+			 * default, which is the opposite of what an unchecked box means. */
+			o.rmempty = (opt.type !== 'bool');
 			rateOpts[opt.name] = o;
 		});
 
