@@ -240,6 +240,65 @@ fu=$(CAKE_AUTORATE_LOG_DIR="$logd3" status_instance_json future | jq -r '.age_s'
 
 # ==========================================================================
 echo
+echo "== 3c. status: uptime comes from the generated config's mtime"
+# A stock OpenWrt has NO `stat` applet (BUSYBOX_DEFAULT_STAT=n, and -c needs
+# FEATURE_STAT_FORMAT, also n), so reading the mtime with `stat -c %Y` silently
+# produced no uptime_s at all on-device and the status view showed a dash next
+# to a "running" badge. file_mtime() must work with `date -r` alone.
+upd="$tmp/uptime"; mkdir -p "$upd/log" "$upd/run/upinst" "$upd/cfg"
+printf '%s\n' "$SUM_HEADER" "$SUM_PRIMARY" > "$upd/log/cake-autorate.upinst.log"
+: > "$upd/cfg/config.upinst.sh"
+# stamp the config an hour into the past so uptime_s is unambiguously non-zero
+touch -d '@'"$((nowts - 3600))" "$upd/cfg/config.upinst.sh" 2>/dev/null \
+	|| touch -t "$(date -d "@$((nowts - 3600))" +%Y%m%d%H%M.%S)" "$upd/cfg/config.upinst.sh"
+
+up_status() {
+	CAKE_AUTORATE_LOG_DIR="$upd/log" CAKE_AUTORATE_RUN_DIR="$upd/run" \
+		CAKE_AUTORATE_CONFIG_PREFIX="$upd/cfg" status_instance_json upinst
+}
+
+uj=$(up_status)
+[ "$(printf '%s' "$uj" | jq -r '.running')" = true ] \
+	&& ok "run dir present -> running == true" || fail "running wrong: $uj"
+upv=$(printf '%s' "$uj" | jq -r '.uptime_s // empty')
+[ -n "$upv" ] && [ "$upv" -ge 3500 ] && [ "$upv" -le 3700 ] \
+	&& ok "uptime_s reports an hour-old config as ~3600s ($upv)" \
+	|| fail "uptime_s wrong: ${upv:-<absent>}"
+
+# The device case: no `stat` on PATH at all. A shell function shadows the
+# command for every lookup in this shell, so this is the real no-stat run.
+stat() { return 127; }
+uj_nostat=$(up_status)
+unset -f stat
+upv2=$(printf '%s' "$uj_nostat" | jq -r '.uptime_s // empty')
+[ -n "$upv2" ] && [ "$upv2" -ge 3500 ] && [ "$upv2" -le 3700 ] \
+	&& ok "uptime_s still reported with no \`stat\` command (busybox default)" \
+	|| fail "uptime_s lost without stat: ${upv2:-<absent>}"
+
+# No generated config -> running, but no uptime claim (never a bogus 0).
+rm -f "$upd/cfg/config.upinst.sh"
+uj_nocfg=$(up_status)
+[ "$(printf '%s' "$uj_nocfg" | jq -r '.running')" = true ] \
+	&& [ "$(printf '%s' "$uj_nocfg" | jq -r 'has("uptime_s")')" = false ] \
+	&& ok "missing generated config -> running, uptime_s omitted" \
+	|| fail "missing-config case wrong: $uj_nocfg"
+
+# No run dir -> stopped, and no uptime even though the config is back.
+: > "$upd/cfg/config.upinst.sh"
+rmdir "$upd/run/upinst"
+uj_stopped=$(up_status)
+[ "$(printf '%s' "$uj_stopped" | jq -r '.running')" = false ] \
+	&& [ "$(printf '%s' "$uj_stopped" | jq -r 'has("uptime_s")')" = false ] \
+	&& ok "no run dir -> running == false, uptime_s omitted" \
+	|| fail "stopped case wrong: $uj_stopped"
+
+# file_mtime rejects a non-numeric reading rather than passing it through.
+[ -z "$(file_mtime "$upd/does-not-exist")" ] \
+	&& ok "file_mtime on a missing file returns nothing" \
+	|| fail "file_mtime invented an mtime for a missing file"
+
+# ==========================================================================
+echo
 echo "== 4. sqm_interfaces: SQM-derived choices + mismatch detection"
 cat > "$tmp/sqm" <<'EOF'
 config queue 'eth1'
