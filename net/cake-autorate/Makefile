@@ -21,7 +21,7 @@ PKG_VERSION:=3.2.2
 # run the script with --fix. Getting this wrong is silent: v0.1.0 and v0.2.0 both
 # shipped r1 with different payloads, and apk never offers a router the version
 # string it already holds.
-PKG_RELEASE:=4
+PKG_RELEASE:=5
 
 # Pinned upstream: lynxthecat/cake-autorate tag v3.2.2 (the original bash
 # implementation, not the "Darkmoon" C rewrite). See
