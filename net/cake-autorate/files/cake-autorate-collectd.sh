@@ -110,21 +110,44 @@ emit_metrics() {
 	'
 }
 
-# process_file <path> -- report the newest SUMMARY line for one instance,
-# falling back to the rotated <path>.old when the current file has none.
+# last_complete_summary <path> -- the newest SUMMARY line that actually has all
+# 13 fields.
+#
+# The COMPLETE matters. The daemon appends a SUMMARY per processed ping response,
+# so when this samples the log there is a real chance of catching a write in
+# progress and reading a half-line:
+#
+#   SUMMARY; 2026-08-13-08:52:00; 1786625520.1331
+#
+# That still matches "^SUMMARY; ", so selecting the last matching line and only
+# then checking the field count means a torn write costs the WHOLE interval for
+# that instance -- every one of its 8 metrics missing, drawn as a gap. The window
+# is small but this runs every interval forever, so over hours it is visible.
+# Choosing the last line that is both a SUMMARY *and* complete costs nothing (the
+# previous line is at most one ping old) and turns a gap into a sample.
+#
+# `tail` first rather than grepping the whole file: the log can reach 100 MB and
+# this runs every interval as `nobody`, possibly on a low-power router. awk does
+# the match, the completeness test and the "keep the last one" in that one pass.
+last_complete_summary() {
+	tail -n 1000 "$1" 2>/dev/null | awk -F'; ' '
+		$1 == "SUMMARY" && NF >= 13 { keep = $0 }
+		END { if (keep != "") print keep }
+	'
+}
+
+# process_file <path> -- report the newest complete SUMMARY line for one
+# instance, falling back to the rotated <path>.old when the current file has none.
 process_file() {
 	logf=$1
 	[ -f "$logf" ] || return 0
 	inst=$(instance_id_from_path "$logf")
 	[ -n "$inst" ] || return 0
 
-	# Only the newest SUMMARY is reported, and there is one per processed ping
-	# response, so `tail` first rather than grepping the whole file: the log can
-	# reach 100 MB and this runs every interval as `nobody`, possibly on a
-	# low-power router. The rpcd status path reads the same log the same way.
-	line=$(tail -n 1000 "$logf" 2>/dev/null | grep '^SUMMARY; ' | tail -n 1)
+	# The rpcd status path reads the same log the same way.
+	line=$(last_complete_summary "$logf")
 	if [ -z "$line" ] && [ -f "$logf.old" ]; then
-		line=$(tail -n 1000 "$logf.old" 2>/dev/null | grep '^SUMMARY; ' | tail -n 1)
+		line=$(last_complete_summary "$logf.old")
 	fi
 	[ -n "$line" ] || return 0
 

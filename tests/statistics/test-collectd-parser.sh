@@ -82,6 +82,20 @@ HEADER='SUMMARY_HEADER; LOG_DATETIME; LOG_TIMESTAMP; DL_ACHIEVED_RATE_KBPS; UL_A
 	printf 'SUMMARY; 2026-07-24-14:29:00; 1753367340.000000; 7000; 3000; 5; 5; 50; 40; dl_idle; ul_idle; 8000; 4000\n'
 } > "$WORK/cake-autorate.tertiary.log.old"
 
+# --- instance "torn": caught mid-write. The daemon appends a SUMMARY per
+#     processed ping response, so sampling the log can land on a half-written
+#     final line -- observed on a live router as:
+#         SUMMARY; 2026-08-13-08:52:00; 1786625520.1331
+#     It matches "^SUMMARY; " but has 3 fields, not 13. Selecting the last
+#     MATCHING line and only then checking the field count would drop it and
+#     emit nothing at all for this instance -- all 8 metrics missing for the
+#     whole interval, drawn as a gap. The last COMPLETE summary must win. ---
+{
+	printf '%s\n' "$HEADER"
+	printf 'SUMMARY; 2026-08-13-08:51:30; 1786625490.000000; 9000; 1490; 6; 6; 58134; 58134; dl_idle_bb; ul_idle_bb; 5000; 3303\n'
+	printf 'SUMMARY; 2026-08-13-08:52:00; 1786625520.1331'
+} > "$WORK/cake-autorate.torn.log"
+
 # ---- run the reader in one-shot mode over the fixtures --------------------
 if [ ! -x "$READER" ]; then
 	printf 'FAIL: reader not found or not executable: %s\n' "$READER" >&2
@@ -92,7 +106,8 @@ OUTPUT=$(COLLECTD_HOSTNAME=testhost COLLECTD_INTERVAL=30 \
 	"$READER" \
 	"$WORK/cake-autorate.primary.log" \
 	"$WORK/cake-autorate.secondary.log" \
-	"$WORK/cake-autorate.tertiary.log" 2>/dev/null)
+	"$WORK/cake-autorate.tertiary.log" \
+	"$WORK/cake-autorate.torn.log" 2>/dev/null)
 
 # ---- assertions: primary (last SUMMARY line only) -------------------------
 have 'primary dl achieved rate'  'PUTVAL "testhost/cake_autorate-primary/bitrate-dl_achieved" interval=30 N:48000'
@@ -121,6 +136,22 @@ have 'secondary dl owd delta'          'PUTVAL "testhost/cake_autorate-secondary
 # ---- assertions: tertiary (rotated -> read from .log.old) -----------------
 have 'tertiary falls back to .old rate' 'PUTVAL "testhost/cake_autorate-tertiary/bitrate-dl_achieved" interval=30 N:7000'
 have 'tertiary falls back to .old load' 'PUTVAL "testhost/cake_autorate-tertiary/gauge-dl_load" interval=30 N:0'
+
+# ---- assertions: torn (half-written final line) ---------------------------
+# The instance must still report -- a torn write costs one ping of freshness,
+# never the whole interval.
+have 'torn: last COMPLETE summary used'  'PUTVAL "testhost/cake_autorate-torn/bitrate-dl_achieved" interval=30 N:9000'
+have 'torn: all 8 metrics still emitted' 'PUTVAL "testhost/cake_autorate-torn/bitrate-ul_shaper" interval=30 N:3303'
+have 'torn: idle+bb maps to 10'          'PUTVAL "testhost/cake_autorate-torn/gauge-dl_load" interval=30 N:10'
+# and nothing may be synthesised from the truncated line's fields
+hasnt 'torn: truncated line not emitted' 'N:1786625520.1331'
+
+if [ "$(printf '%s\n' "$OUTPUT" | grep -c '^PUTVAL "testhost/cake_autorate-torn/')" = "8" ]; then
+	pass=$((pass + 1)); printf 'ok   torn: exactly 8 metrics, no gap\n'
+else
+	fail=$((fail + 1)); printf 'FAIL torn: expected 8 metrics, got %s\n' \
+		"$(printf '%s\n' "$OUTPUT" | grep -c '^PUTVAL "testhost/cake_autorate-torn/')"
+fi
 
 # ---- summary --------------------------------------------------------------
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
