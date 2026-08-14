@@ -21,7 +21,7 @@ PKG_VERSION:=3.2.2
 # run the script with --fix. Getting this wrong is silent: v0.1.0 and v0.2.0 both
 # shipped r1 with different payloads, and apk never offers a router the version
 # string it already holds.
-PKG_RELEASE:=5
+PKG_RELEASE:=6
 
 # Pinned upstream: lynxthecat/cake-autorate tag v3.2.2 (the original bash
 # implementation, not the "Darkmoon" C rewrite). See
@@ -140,6 +140,19 @@ define Package/cake-autorate/install
 	$(INSTALL_DIR) $(1)/usr/libexec/cake-autorate
 	$(INSTALL_BIN) ./files/cake-autorate-bridge.sh \
 		$(1)/usr/libexec/cake-autorate/cake-autorate-bridge.sh
+
+	# --- operator diagnostic ---------------------------------------------
+	# /usr/bin, not /usr/libexec: unlike the bridge and the collectd reader,
+	# this one is typed by a human over SSH. It answers "is the loaded
+	# latency CAKE's queue, or the radio downstream of it?" -- the question
+	# that decides whether ul_owd_delta_thr_ms is set below the link's own
+	# floor, where the daemon collapses to min_ul_shaper_rate_kbps forever.
+	# No new DEPENDS: it uses tc and fping, both already required, and
+	# degrades to "generate load yourself" without the optional Ookla CLI.
+	# See docs/tuning.md.
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) ./files/cake-autorate-probe.sh \
+		$(1)/usr/bin/cake-autorate-probe
 
 	# --- collectd exec statistics source --------------------------------
 	$(INSTALL_DIR) $(1)/etc/collectd/conf.d
