@@ -214,6 +214,52 @@ is installed and collectd is running you get RRD graphs with **no extra setup**.
      load and a value `>= 10` means bufferbloat is currently flagged (the load
      level is the value mod 10).
 
+With the default `pinger_binary` of `fping`, the **download and upload OWD delta
+curves are identical**, because ICMP echo has no one-way delay to measure:
+upstream halves the round-trip time and uses it for both directions. Set
+`pinger_binary` to `tsping` (ICMP timestamps) if you want the two directions
+measured separately.
+
+### Gaps in the graphs are expected on an idle link
+
+**A flat-lined or absent graph on a quiet connection is normal, not a fault.**
+
+cake-autorate stops measuring when there is nothing to measure. Once both
+directions have stayed under `connection_active_thr_kbps` (default **2000**
+Kbit/s) for `sustained_idle_sleep_thr_s` (default **60** s), the daemon puts its
+pingers to sleep and **writes no `SUMMARY` lines at all** until traffic in either
+direction exceeds `connection_active_thr_kbps` again. No `SUMMARY` lines means no
+samples, so the graph shows a **gap** for as long as the link stays quiet.
+
+Note how high that wake threshold is: at 2 Mbit/s, ordinary background chatter —
+a few hundred Kbit/s of IoT traffic, an idle browser tab — is *not* enough to
+wake the daemon. A lightly used connection can sit asleep for most of the day and
+its graphs will be mostly gap.
+
+The collectd reader deliberately makes this visible. Every collectd value is
+stamped with the time it was *collected*, not the time the daemon measured it, so
+re-reporting the last `SUMMARY` line during a sleep would draw a perfectly flat
+line that is indistinguishable from a genuinely steady link — stale numbers
+presented as live ones. Instead the reader publishes a sample only while it is
+fresh (newer than two collection intervals, and never less than 60 s), and
+publishes nothing at all once it goes stale. **A gap means "not measured"; it
+never means "measured as zero".**
+
+Two ways to tell an idle link apart from an actual failure:
+
+- the **Status** page reports the daemon's run state and the **age of the last
+  sample** — a running daemon with an ageing sample is asleep, not broken;
+- the load-state graph's last drawn value before the gap is `0` (idle) in both
+  directions, which is the daemon on its way to sleep.
+
+If you would rather have continuous graphs, clear **`enable_sleep_function`** in
+the **Idle** tab. The cost is what the sleep function exists to avoid: the
+pingers keep running around the clock, so the router keeps burning CPU and
+sending ICMP to the reflectors on a link nobody is using. Lowering
+`connection_active_thr_kbps` instead makes the daemon wake on lighter traffic,
+but upstream **refuses to start** if it exceeds either `min_dl_shaper_rate_kbps`
+or `min_ul_shaper_rate_kbps`, so it can only go down, not up.
+
 ### Statistics caveat
 
 The package drops its collectd config at `/etc/collectd/conf.d/cake-autorate.conf`

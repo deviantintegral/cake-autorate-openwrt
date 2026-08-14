@@ -100,6 +100,19 @@ parsers):
   silent for as long as the link is idle (it sleeps the pingers). A freshly
   rotated log holds only the `*_HEADER` lines, so both parsers fall back to
   `<log>.old`.
+- **The newest `SUMMARY` line is not necessarily a current one.** Because the
+  daemon writes nothing at all while it sleeps through an idle link, that line
+  can be arbitrarily old. Neither consumer may present it as live: the collectd
+  reader **publishes nothing** once the line is older than two collection
+  intervals (`summary_is_fresh`), because `PUTVAL … N:` stamps values with the
+  collection time and would otherwise record minutes-old numbers as fresh
+  samples — a flat graph line indistinguishable from a steady link. The rpcd
+  status method reports the sample's `age_s` instead, so the view can say how
+  stale it is. Both derive age from field 2 (`LOG_TIMESTAMP`). Anything that
+  makes the age unknowable (unreadable clock, non-numeric timestamp) **fails
+  open** and reports the sample: going dark is worse than being late. An idle
+  link therefore reads as a **gap**, which is documented as expected behaviour in
+  `docs/configuration.md`.
 
 ## Other durable facts
 

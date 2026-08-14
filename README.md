@@ -240,7 +240,8 @@ warning the base package's postinst logs when its reload did not take.
 
 - [`docs/configuration.md`](docs/configuration.md) — user configuration
   reference: the Essentials-first path, the grouped advanced options, SQM
-  interface validation, multi-WAN, and reading the statistics graphs.
+  interface validation, multi-WAN, and reading the statistics graphs —
+  including why an idle link draws gaps rather than a flat line.
 - [`docs/tuning.md`](docs/tuning.md) — tuning on a radio link (5G/LTE/WISP) with
   the bundled `cake-autorate-probe` diagnostic: telling the shaper's own queue
   apart from the radio's delay floor, and setting `ul_owd_delta_thr_ms` against
