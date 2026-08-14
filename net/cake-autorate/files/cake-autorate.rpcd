@@ -231,6 +231,28 @@ _emit_enabled_instance() {
 	[ "$en" = 1 ] && printf '%s\n' "$sid"
 }
 
+# Epoch mtime of a file, or nothing at all when it cannot be read.
+#
+# `stat` is NOT available on a stock OpenWrt: busybox ships with
+# BUSYBOX_DEFAULT_STAT=n (and its -c format needs FEATURE_STAT_FORMAT, also n),
+# so `stat -c %Y` is a command-not-found on every device that has not installed
+# coreutils-stat. busybox `date` is always present and its -r takes a file, so
+# that is the reader here; `stat` stays as the fallback for the environments
+# where date -r means something else (BSD/macOS, where it takes an epoch).
+# Both readers are validated to be all-digits before use.
+file_mtime() {
+	local f="$1" v
+	[ -e "$f" ] || return 0
+	v=$(date -r "$f" +%s 2>/dev/null) || v=''
+	case "$v" in
+		''|*[!0-9]*) v=$(stat -c %Y "$f" 2>/dev/null) || v='' ;;
+	esac
+	case "$v" in
+		''|*[!0-9]*) return 0 ;;
+	esac
+	printf '%s\n' "$v"
+}
+
 # JSON object for one instance's status (braces included). Never fails: a
 # missing or empty log returns {"available":false,"reason":...}.
 status_instance_json() {
@@ -252,7 +274,7 @@ status_instance_json() {
 		# "running since the last apply". The run-dir mtime was used before, but
 		# it moves whenever the daemon adds or removes a state file under it, so
 		# the uptime jumped around on every poll.
-		mt=$(stat -c %Y "$cfg" 2>/dev/null || echo '')
+		mt=$(file_mtime "$cfg")
 		if [ -n "$mt" ] && [ -n "$now" ] && [ "$now" -ge "$mt" ]; then
 			up=$((now - mt))
 			run_json="\"running\":true,\"uptime_s\":$up"

@@ -121,6 +121,25 @@ group membership alone is not enough if the node is `0660` and you are not in
 `kvm`), `python3` (stdlib only), `qemu-img`, `mkfs.ext4`, and outbound internet
 to `downloads.openwrt.org`.
 
+On Debian/Ubuntu the emulator is a **separate package** from the disk tools:
+`qemu-utils` supplies `qemu-img`, but `qemu-system-x86_64` comes from
+`qemu-system-x86`. A host with only the former passes a `qemu-img` check and
+then skips every VM suite for want of an emulator.
+
+`/dev/kvm` is `root:kvm 0660` on a stock Debian, so joining the group is the
+durable fix — but a group is granted at **login**, and `usermod -aG kvm $USER`
+does nothing for shells that are already open. Start a new session, or borrow
+the group for one command:
+
+```sh
+sudo usermod -aG kvm "$USER"     # persistent, needs a fresh login
+sg kvm -c './tests/integration/run.sh'   # works right now, in this shell
+```
+
+(`sudo setfacl -m u:$USER:rw /dev/kvm` also works and takes effect at once, but
+it is undone by the next udev event on the node, which is a confusing way to
+lose access halfway through a session.)
+
 It also needs **unprivileged ICMP** to be permitted:
 
 ```sh
@@ -144,6 +163,31 @@ INTEGRATION_SKIPPED: no KVM
 
 and exits **0** — a *skip*, not a failure. Set `CA_IT_REQUIRE_KVM=1` to make a
 missing KVM a hard error instead.
+
+### Where you check the tree out is a constraint
+
+QEMU's serial and QMP sockets are UNIX domain sockets in
+`tests/integration/artifacts/`, and `sockaddr_un.sun_path` holds **108 bytes**
+including the NUL. That budget is spent by wherever you cloned the repo, so a
+deep checkout makes the harness unrunnable:
+
+```
+$ ./tests/integration/run.sh
+ERROR: the QEMU serial socket path is 139 bytes:
+         /home/you/src/…/.claude/worktrees/my-branch/tests/integration/artifacts/serial.sock
+```
+
+A plain clone under `$HOME` has room to spare; a **git worktree under
+`.claude/worktrees/<name>/`** adds roughly 40 bytes and can push an otherwise
+fine path over on its own. Run the harness from a shorter path — a worktree
+created outside `.claude/worktrees/` is enough.
+
+`run.sh` checks this before it boots anything. Prior to that check the run died
+as a bare `qemu exited early (rc=1)`, because the driver started QEMU with its
+stderr folded into a `DEVNULL` stdout and discarded the one line explaining
+itself. QEMU's stderr is now kept in `artifacts/qemu.log` and its tail is
+quoted into the error, so any refusal to start — bad drive, unusable
+accelerator, over-long path — says so.
 
 ### Environment overrides (`CA_IT_*`)
 

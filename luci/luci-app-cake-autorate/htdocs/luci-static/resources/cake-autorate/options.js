@@ -19,6 +19,12 @@
  *           (pinger_binary=ListValue), list=DynamicList.
  * lo/hi  -> optional numeric bounds turned into a LuCI datatype by the view.
  * doc    -> optional upstream doc link for a concept needing more than a sentence.
+ * def    -> bool options only: the packaged UCI default (uci_default in
+ *           docs/uci-option-schema.tsv), so a newly added instance starts with
+ *           the same checkbox states /etc/config/cake-autorate ships. Every
+ *           bool carries one and the unit test asserts it against the TSV; a
+ *           text field needs no equivalent because "empty" is a state the user
+ *           can actually see, while an unchecked box is not.
  */
 
 var DOC = 'https://github.com/lynxthecat/cake-autorate/wiki';
@@ -47,11 +53,11 @@ var OPTIONS = [
 	  desc: 'Ceiling for the upload shaper rate.', units: 'Kbit/s, >= base' },
 
 	/* ---- shaper (11) --------------------------------------------------- */
-	{ name: 'adjust_dl_shaper_rate', group: 'shaper', type: 'bool',
+	{ name: 'adjust_dl_shaper_rate', group: 'shaper', type: 'bool', def: 1,
 	  desc: 'Apply download shaper rate changes; when off the daemon only monitors.', units: '0 or 1' },
-	{ name: 'adjust_ul_shaper_rate', group: 'shaper', type: 'bool',
+	{ name: 'adjust_ul_shaper_rate', group: 'shaper', type: 'bool', def: 1,
 	  desc: 'Apply upload shaper rate changes; when off the daemon only monitors.', units: '0 or 1' },
-	{ name: 'min_shaper_rates_enforcement', group: 'shaper', type: 'bool',
+	{ name: 'min_shaper_rates_enforcement', group: 'shaper', type: 'bool', def: 0,
 	  desc: 'Drop both shapers to their minimum rates when the connection is idle or stalled.', units: '0 or 1' },
 	{ name: 'shaper_rate_min_adjust_down_bufferbloat', group: 'shaper', type: 'float', lo: 0, hi: 1,
 	  desc: 'Smallest shaper-rate reduction factor applied on a bufferbloat event.', units: 'multiplier, 0-1', doc: DOC },
@@ -87,7 +93,7 @@ var OPTIONS = [
 	{ name: 'reflectors', group: 'reflectors', type: 'list',
 	  desc: 'Ordered pool of ICMP reflector IPs; the first no_pingers entries are used, the rest are spares for rotation.',
 	  units: 'list of IPv4/IPv6 addresses; length should be >= no_pingers', doc: DOC },
-	{ name: 'randomize_reflectors', group: 'reflectors', type: 'bool',
+	{ name: 'randomize_reflectors', group: 'reflectors', type: 'bool', def: 1,
 	  desc: 'Shuffle the reflector list at startup so instances do not all hammer the same hosts.', units: '0 or 1' },
 	{ name: 'reflector_health_check_interval_s', group: 'reflectors', type: 'float',
 	  desc: 'How often reflector health is evaluated.', units: 'seconds' },
@@ -129,7 +135,7 @@ var OPTIONS = [
 	  desc: 'Smoothing factor applied to the OWD delta from baseline.', units: 'EWMA alpha, 0-1', doc: DOC },
 
 	/* ---- idle (8) ------------------------------------------------------ */
-	{ name: 'enable_sleep_function', group: 'idle', type: 'bool',
+	{ name: 'enable_sleep_function', group: 'idle', type: 'bool', def: 1,
 	  desc: 'Pause all pingers when the connection has been idle, saving CPU and needless ICMP.', units: '0 or 1' },
 	{ name: 'connection_active_thr_kbps', group: 'idle', type: 'integer',
 	  desc: 'Achieved rate below which a direction counts as idle rather than low-load.', units: 'Kbit/s' },
@@ -147,21 +153,21 @@ var OPTIONS = [
 	  desc: 'How often to re-check that the interface rx/tx byte-counter files exist (boot / sleep recovery).', units: 'seconds' },
 
 	/* ---- logging (14) -------------------------------------------------- */
-	{ name: 'output_processing_stats', group: 'logging', type: 'bool',
+	{ name: 'output_processing_stats', group: 'logging', type: 'bool', def: 0,
 	  desc: 'Emit the per-ping DATA monitoring lines (full processing detail; heavy).', units: '0 or 1' },
-	{ name: 'output_load_stats', group: 'logging', type: 'bool',
+	{ name: 'output_load_stats', group: 'logging', type: 'bool', def: 0,
 	  desc: 'Emit LOAD lines showing achieved dl/ul rates on every rate sample.', units: '0 or 1' },
-	{ name: 'output_reflector_stats', group: 'logging', type: 'bool',
+	{ name: 'output_reflector_stats', group: 'logging', type: 'bool', def: 0,
 	  desc: 'Emit REFLECTOR lines with per-reflector baseline/EWMA comparison data.', units: '0 or 1' },
-	{ name: 'output_summary_stats', group: 'logging', type: 'bool', managed: true,
+	{ name: 'output_summary_stats', group: 'logging', type: 'bool', def: 1, managed: true,
 	  desc: 'Emit the condensed SUMMARY lines. Package-managed: the service forces this on so the status view and collectd have data to parse.', units: '0 or 1' },
-	{ name: 'output_cake_changes', group: 'logging', type: 'bool',
+	{ name: 'output_cake_changes', group: 'logging', type: 'bool', def: 0,
 	  desc: 'Emit a SHAPER line for every tc qdisc change the daemon issues.', units: '0 or 1' },
-	{ name: 'debug', group: 'logging', type: 'bool',
+	{ name: 'debug', group: 'logging', type: 'bool', def: 0,
 	  desc: 'Emit DEBUG lines to the log; the packaged default is off to spare tmpfs RAM.', units: '0 or 1' },
-	{ name: 'log_DEBUG_messages_to_syslog', group: 'logging', type: 'bool', managed: true,
+	{ name: 'log_DEBUG_messages_to_syslog', group: 'logging', type: 'bool', def: 0, managed: true,
 	  desc: 'Also send every DEBUG record to syslog (very high volume). Package-managed: the service forces this off.', units: '0 or 1' },
-	{ name: 'log_to_file', group: 'logging', type: 'bool', managed: true,
+	{ name: 'log_to_file', group: 'logging', type: 'bool', def: 1, managed: true,
 	  desc: 'Write the log stream to the log file. Package-managed: the service forces this on (procd has no terminal).', units: '0 or 1' },
 	{ name: 'log_file_max_time_mins', group: 'logging', type: 'integer', lo: 1,
 	  desc: 'Rotate the log file once this many minutes of log lines have accumulated.', units: 'minutes, > 0' },
@@ -173,7 +179,7 @@ var OPTIONS = [
 	  desc: 'Size of the write buffer in front of the log file.', units: 'bytes' },
 	{ name: 'log_file_buffer_timeout_ms', group: 'logging', type: 'integer',
 	  desc: 'Flush the log buffer after this long even if it is not full.', units: 'milliseconds' },
-	{ name: 'log_file_export_compress', group: 'logging', type: 'bool',
+	{ name: 'log_file_export_compress', group: 'logging', type: 'bool', def: 1,
 	  desc: 'gzip exported log files and append .gz to the export filename.', units: '0 or 1' }
 ];
 
