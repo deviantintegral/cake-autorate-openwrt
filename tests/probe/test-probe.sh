@@ -21,6 +21,10 @@
 #      a report that fails to isolate that window measures the wrong thing.
 #   4. the fping RTT SAMPLER, which turns `fping -D -p 200 -l` into ts,rtt_ms
 #      and must drop timeouts and stderr noise rather than sample them.
+#   5. the INTERFACE DERIVATION, which reads SQM's own UCI config when -i is
+#      not given -- and must never auto-select an ifb4* ingress device, never
+#      pick between several shaped interfaces, and never stay silent about
+#      what it chose. Driven through a stub `uci` on PATH.
 #
 # plus the percentile helper the whole report is printed through, and the
 # `-h` usage range over the script's own header comment.
@@ -271,7 +275,185 @@ eq 'pct over a 3-sample series' \
 eq 'pct reports an empty series' '(no samples)' \
 	"$(pct "$work/rtt-empty.csv" 2 | sed 's/^ *//')"
 
-# --- 5: -h prints the whole header comment ----------------------------------
+# --- 5: the interface default, derived from SQM -----------------------------
+#
+# With no -i the probe asks SQM what it shapes, because SQM owns the CAKE qdisc
+# and a hardcoded device name is only ever right on one router. The rules it
+# must follow, in order of how badly each one hurts when wrong:
+#
+#   * NEVER auto-select an ifb4* device. That is the ingress side; the egress
+#     qdisc is the only one that queues on upload, so measuring the ifb would
+#     invert the verdict rather than fail visibly.
+#   * refuse to guess between several. Picking the first would measure one WAN
+#     and report it as the other.
+#   * say which interface it picked, or a run is not reproducible.
+#
+# Driven through a stub `uci` on PATH answering from a fixture in real
+# `uci show` format, so the parsing this exercises is the parsing a router
+# gets -- anonymous `@queue[0]` sections included, brackets and all.
+
+# The host has no uci at all, which is exactly the "not on a router" case.
+if ! command -v uci >/dev/null 2>&1; then
+	UCIERR=$(derive_iface_from_sqm 2>&1 >/dev/null)
+	UCIRC=$?
+	eq 'no uci at all -> fails' 1 "$UCIRC"
+	case "$UCIERR" in
+	*"pass -i"*) ok 'no uci at all -> says to pass -i' ;;
+	*) bad "no uci at all -> says to pass -i (got: $UCIERR)" ;;
+	esac
+fi
+
+mkdir -p "$work/bin"
+cat > "$work/bin/uci" <<'UCISTUB'
+#!/bin/sh
+# Stub uci: answers `uci -q show sqm` and `uci -q get sqm.<sect>.<opt>` from
+# the fixture named by $UCI_FIXTURE, in real `uci show` output format.
+f=${UCI_FIXTURE:-/dev/null}
+cmd=""
+arg=""
+for a in "$@"; do
+	case "$a" in
+	-*) continue ;;
+	esac
+	if [ -z "$cmd" ]; then cmd=$a; else arg=$a; fi
+done
+case "$cmd" in
+show)
+	# Both spellings real uci emits: the section line
+	# (sqm.@queue[0]=queue) and its option lines.
+	grep "^${arg}\." "$f" 2>/dev/null
+	exit 0
+	;;
+get)
+	# Exact key compare, NOT a regex: an anonymous section id like
+	# @queue[0] is full of regex metacharacters.
+	awk -v k="$arg" '
+		substr($0, 1, length(k) + 1) == k "=" {
+			v = substr($0, length(k) + 2)
+			gsub(/^["\047]|["\047]$/, "", v)
+			print v; found = 1; exit
+		}
+		END { exit(found ? 0 : 1) }' "$f" 2>/dev/null
+	exit $?
+	;;
+esac
+exit 1
+UCISTUB
+chmod +x "$work/bin/uci"
+PATH="$work/bin:$PATH"
+export PATH
+
+derive() { # derive <fixture-file> -- prints the chosen iface, stderr kept apart
+	UCI_FIXTURE=$1 derive_iface_from_sqm 2>"$work/derive.err"
+}
+
+# --- one enabled queue, anonymous section: use it -----------------------
+cat > "$work/sqm-one" <<'EOF'
+sqm.@queue[0]=queue
+sqm.@queue[0].interface='eth1'
+sqm.@queue[0].enabled='1'
+sqm.@queue[0].download='80000'
+sqm.@queue[0].upload='10000'
+sqm.@queue[0].qdisc='cake'
+EOF
+eq 'one enabled SQM queue -> that interface' eth1 "$(derive "$work/sqm-one")"
+UCI_FIXTURE="$work/sqm-one" derive_iface_from_sqm >/dev/null 2>&1
+eq 'one enabled SQM queue -> exit 0' 0 "$?"
+
+# --- named section, and `enabled` absent (uci bool default) -------------
+cat > "$work/sqm-named" <<'EOF'
+sqm.wan=queue
+sqm.wan.interface='eth0.35'
+sqm.wan.qdisc='cake'
+EOF
+eq 'named section, enabled absent -> still derived' eth0.35 \
+	"$(derive "$work/sqm-named")"
+
+# --- a disabled queue must not count ------------------------------------
+cat > "$work/sqm-mixed" <<'EOF'
+sqm.@queue[0]=queue
+sqm.@queue[0].interface='eth2'
+sqm.@queue[0].enabled='0'
+sqm.@queue[1]=queue
+sqm.@queue[1].interface='eth1'
+sqm.@queue[1].enabled='1'
+EOF
+eq 'disabled queue skipped, enabled one chosen' eth1 "$(derive "$work/sqm-mixed")"
+
+# --- no SQM config at all ------------------------------------------------
+: > "$work/sqm-empty"
+eq 'no SQM queue -> no interface printed' '' "$(derive "$work/sqm-empty")"
+UCI_FIXTURE="$work/sqm-empty" derive_iface_from_sqm >/dev/null 2>&1
+eq 'no SQM queue -> fails rather than guessing' 1 "$?"
+UCI_FIXTURE="$work/sqm-empty" derive_iface_from_sqm >/dev/null 2>"$work/derive.err"
+if grep -q 'pass -i' "$work/derive.err"; then
+	ok 'no SQM queue -> tells the user to pass -i'
+else
+	bad 'no SQM queue -> tells the user to pass -i'
+fi
+
+# --- every queue disabled is the same case ------------------------------
+cat > "$work/sqm-alloff" <<'EOF'
+sqm.@queue[0]=queue
+sqm.@queue[0].interface='eth1'
+sqm.@queue[0].enabled='0'
+EOF
+UCI_FIXTURE="$work/sqm-alloff" derive_iface_from_sqm >/dev/null 2>&1
+eq 'all queues disabled -> fails' 1 "$?"
+
+# --- two enabled queues: refuse, and LIST them --------------------------
+cat > "$work/sqm-two" <<'EOF'
+sqm.@queue[0]=queue
+sqm.@queue[0].interface='eth1'
+sqm.@queue[0].enabled='1'
+sqm.wan2=queue
+sqm.wan2.interface='wwan0'
+sqm.wan2.enabled='1'
+EOF
+eq 'two enabled queues -> nothing chosen' '' "$(derive "$work/sqm-two")"
+UCI_FIXTURE="$work/sqm-two" derive_iface_from_sqm >/dev/null 2>&1
+eq 'two enabled queues -> fails rather than picking one' 1 "$?"
+UCI_FIXTURE="$work/sqm-two" derive_iface_from_sqm >/dev/null 2>"$work/derive.err"
+if grep -q -- '-i eth1' "$work/derive.err" && grep -q -- '-i wwan0' "$work/derive.err"; then
+	ok 'two enabled queues -> lists both candidates'
+else
+	bad 'two enabled queues -> lists both candidates'
+fi
+
+# --- the ifb4 guard ------------------------------------------------------
+# An ifb4* device is the INGRESS half. Auto-selecting it would measure the
+# wrong direction and silently invert the verdict, so it is never a candidate
+# -- not even when it is the only thing SQM names.
+cat > "$work/sqm-ifb" <<'EOF'
+sqm.@queue[0]=queue
+sqm.@queue[0].interface='ifb4eth1'
+sqm.@queue[0].enabled='1'
+sqm.@queue[1]=queue
+sqm.@queue[1].interface='eth1'
+sqm.@queue[1].enabled='1'
+EOF
+eq 'ifb4 device never auto-selected (egress wins)' eth1 "$(derive "$work/sqm-ifb")"
+
+cat > "$work/sqm-ifbonly" <<'EOF'
+sqm.@queue[0]=queue
+sqm.@queue[0].interface='ifb4eth1'
+sqm.@queue[0].enabled='1'
+EOF
+eq 'ifb4-only config -> nothing chosen' '' "$(derive "$work/sqm-ifbonly")"
+UCI_FIXTURE="$work/sqm-ifbonly" derive_iface_from_sqm >/dev/null 2>&1
+eq 'ifb4-only config -> fails rather than measuring ingress' 1 "$?"
+
+# --- an option whose VALUE is "queue" is not a section -------------------
+cat > "$work/sqm-decoy" <<'EOF'
+sqm.@queue[0]=queue
+sqm.@queue[0].interface='eth1'
+sqm.@queue[0].enabled='1'
+sqm.@queue[0].script='queue'
+EOF
+eq 'option valued "queue" is not read as a section' eth1 \
+	"$(derive "$work/sqm-decoy")"
+
+# --- 6: -h prints the whole header comment ----------------------------------
 # The usage text is a `sed -n '<a>,<b>p' "$0"` range over this script's own
 # header. Nothing keeps that range honest but this check: assert both ENDS of
 # the block, so an edit that grows the header cannot silently truncate the only
@@ -296,6 +478,14 @@ if printf '%s\n' "$HELP" | grep -q 'set -u'; then
 	bad 'usage stops at the end of the header comment'
 else
 	ok 'usage stops at the end of the header comment'
+fi
+# The -i default is derived, not hardcoded; the usage text is the only place a
+# user learns that, so it has to say so.
+if printf '%s\n' "$HELP" | grep -q 'SQM is configured to shape' &&
+	printf '%s\n' "$HELP" | grep -q 'auto-selects an ifb4'; then
+	ok 'usage documents the SQM-derived -i default and the ifb4 guard'
+else
+	bad 'usage documents the SQM-derived -i default and the ifb4 guard'
 fi
 
 # --- summary ----------------------------------------------------------------

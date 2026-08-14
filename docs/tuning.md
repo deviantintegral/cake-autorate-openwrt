@@ -77,23 +77,55 @@ and only one of them is in the same units as the daemon's decision.
 # report compares against, so the measurement chases a moving target.
 /etc/init.d/cake-autorate stop
 
-# -i is the EGRESS device (your instance's ul_if), never the ifb4* ingress.
 # -s pins the speedtest server: a server that differs between runs is the
 #    single biggest source of noise in these measurements.
-cake-autorate-probe -i eth1 -r 1.1.1.1 -s 12345
+cake-autorate-probe -r 1.1.1.1 -s 12345
+```
+
+With one SQM queue enabled there is nothing to choose, so the probe reads the
+interface out of SQM's own config and says which one it took:
+
+```
+cake-autorate-probe: no -i given: measuring eth1, the egress SQM is configured to shape
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `-i` | egress interface carrying the CAKE qdisc (the instance's `ul_if`) |
+| `-i` | egress interface carrying the CAKE qdisc (the instance's `ul_if`). **Default: derived from SQM** — see below |
 | `-r` | ICMP reflector to sample RTT against |
 | `-s` | Ookla speedtest server id — pin it |
 | `-b` | seconds of idle baseline before load (default 10) |
 | `-h` | print the header comment, which is the usage text |
 
+### Which interface gets measured
+
+SQM owns the CAKE qdisc, so with no `-i` the probe asks SQM: it enumerates the
+`queue` sections in `/etc/config/sqm` (through the `uci` CLI), keeps the enabled
+ones, and reads their `interface` option.
+
+- **Exactly one** — it uses that interface and prints the line above. Nothing
+  about the run is left implicit.
+- **None** — it stops and asks for `-i`, because there is nothing to derive
+  from.
+- **Several** (multi-WAN) — it stops and **lists the candidates** rather than
+  picking one, since measuring the wrong WAN produces a confident report about
+  a link you were not asking about:
+
+  ```
+  cake-autorate-probe: SQM shapes more than one interface; pass -i to choose:
+      -i eth1
+      -i wwan0
+  ```
+
+An `ifb4*` device is **never** auto-selected. It is the ingress half; the
+egress qdisc is the only one that queues on upload, so measuring the ifb would
+not fail loudly — it would quietly invert the verdict. Pass `-i` explicitly if
+you ever genuinely want one.
+
 Run it two or three times before believing a number. It exits non-zero if `tc`
-or `fping` is missing, or if the interface has no CAKE qdisc (which usually
-means SQM is not running, or `-i` names the wrong device).
+or `fping` is missing, if the interface could not be derived, or if the
+interface has no CAKE qdisc (which usually means SQM is not running, or `-i`
+names the wrong device).
 
 ## Reading the report
 
@@ -208,5 +240,6 @@ twice as high as anything the controller ever measures.
   fine at 03:00 and congested at 21:00 will report two different floors; tune
   for the worse one.
 - The parsers behind all of this (`tc` rate-unit normalisation, the qdisc
-  parser, the saturation window, the percentile helper, the RTT sampler) are
-  covered off-device by [`tests/probe/test-probe.sh`](../tests/probe/test-probe.sh).
+  parser, the saturation window, the percentile helper, the RTT sampler, and
+  the SQM interface derivation including its ifb4 guard) are covered off-device
+  by [`tests/probe/test-probe.sh`](../tests/probe/test-probe.sh).

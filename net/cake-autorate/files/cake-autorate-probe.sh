@@ -27,7 +27,12 @@
 #
 # Usage: cake-autorate-probe [-i iface] [-r reflector] [-s server-id] [-b secs]
 #
-#   -i  egress (upload) interface carrying the CAKE qdisc  (default eth0.35)
+#   -i  egress (upload) interface carrying the CAKE qdisc. Defaults to the
+#       interface SQM is configured to shape: with exactly one enabled SQM
+#       queue the probe uses it and says so, and with none or several it
+#       refuses to guess and asks for -i. It never auto-selects an ifb4*
+#       device -- that is the INGRESS side, and measuring it would invert the
+#       diagnosis this tool exists to make.
 #   -r  ICMP reflector to sample RTT against               (default 1.1.1.1)
 #   -s  Ookla speedtest server id -- pin it; a server that differs between runs
 #       is the single biggest source of noise in these measurements
@@ -35,7 +40,7 @@
 
 set -u
 
-IFACE=eth0.35
+IFACE=""
 REFLECTOR=1.1.1.1
 SRV=""
 BASE=10
@@ -101,6 +106,84 @@ AWK_RTT_SAMPLE='
 	/bytes,/ { ts=$1; gsub(/[][]/,"",ts)
 	           for(n=1;n<=NF;n++) if($n=="ms") { print ts","$(n-1); fflush(); break } }'
 
+# --- where to measure, when -i is not given ---------------------------------
+# SQM owns the CAKE qdisc (see AGENTS.md); its config is therefore the
+# authority on which egress is shaped, and it is the same source the rpcd
+# backend's sqm_interfaces method reads. Deriving from it beats any hardcoded
+# device name, and beats sniffing `tc` output: a router with SQM on two WANs
+# has two cake qdiscs and only the operator knows which link is under test.
+#
+# The uci CLI, NOT /lib/functions.sh. This script runs `set -u`, and OpenWrt's
+# libuci helpers are not nounset-clean -- sourcing them would force a `set +u`
+# wrapper around every call (AGENTS.md, tests/regression/test-libuci-nounset.sh).
+# The CLI has no such problem and needs no wrapper.
+
+sqm_egress_candidates() { # -> one shaped egress interface per line
+	uci -q show sqm 2>/dev/null | while IFS= read -r line; do
+		key=${line%%=*}
+		val=${line#*=}
+		# `uci show` quotes option VALUES but not section types; strip
+		# either spelling rather than depending on which uci this is.
+		val=$(printf '%s' "$val" | tr -d "\"'")
+		[ "$val" = queue ] || continue
+		# Section lines are sqm.<section>; an option line has a second
+		# dot (sqm.<section>.<option>) and is not a section.
+		case "$key" in
+		sqm.*.*) continue ;;
+		sqm.*) ;;
+		*) continue ;;
+		esac
+		sect=${key#sqm.}
+
+		# UCI bool spellings, and ABSENT means enabled -- the same
+		# reading parse_sqm_sections() in the rpcd backend applies.
+		en=$(uci -q get "sqm.$sect.enabled" 2>/dev/null)
+		case "${en:-1}" in
+		1 | on | true | yes | enabled) ;;
+		*) continue ;;
+		esac
+
+		iface=$(uci -q get "sqm.$sect.interface" 2>/dev/null)
+		[ -n "$iface" ] || continue
+
+		# NEVER an ifb device. SQM's `interface` option names the egress,
+		# so this should not fire -- but the egress qdisc is the only one
+		# that queues on upload, and silently measuring the ingress ifb
+		# would invert the verdict itself. Cheap to make impossible,
+		# expensive to debug if it ever happened.
+		case "$iface" in
+		ifb*) continue ;;
+		esac
+		printf '%s\n' "$iface"
+	done
+}
+
+derive_iface_from_sqm() { # -> the one shaped egress on stdout, or fails
+	if ! command -v uci >/dev/null 2>&1; then
+		echo "cake-autorate-probe: uci not found -- pass -i <egress interface>" >&2
+		return 1
+	fi
+	_cands=$(sqm_egress_candidates | sort -u)
+	_n=$(printf '%s' "$_cands" | grep -c . 2>/dev/null || true)
+	case "${_n:-0}" in
+	1)
+		printf '%s\n' "$_cands"
+		return 0
+		;;
+	0)
+		echo "cake-autorate-probe: no enabled SQM queue names an interface to shape." >&2
+		echo "cake-autorate-probe: is SQM configured? Otherwise pass -i <egress interface>." >&2
+		echo "cake-autorate-probe: (ifb4* ingress devices are never auto-selected.)" >&2
+		return 1
+		;;
+	*)
+		echo "cake-autorate-probe: SQM shapes more than one interface; pass -i to choose:" >&2
+		printf '%s\n' "$_cands" | sed 's/^/    -i /' >&2
+		return 1
+		;;
+	esac
+}
+
 pct() { # pct <file> <colnum>  -- prints p50/p95/p99/max of that column
 	# No awk functions here: busybox awk rejects them inside END.
 	awk -F, -v c="$2" '{print $c}' "$1" | sort -n > "$WORK/.s"
@@ -129,12 +212,20 @@ while getopts "i:r:s:b:h" o 2>/dev/null; do
 	# ends on the last "#" line of that block -- tests/probe/test-probe.sh
 	# asserts both ends of it, so moving the header cannot silently truncate
 	# the only usage text this tool has.
-	*) sed -n '2,34p' "$0"; exit 2 ;;
+	*) sed -n '2,39p' "$0"; exit 2 ;;
 	esac
 done
 
 command -v tc >/dev/null    || { echo "cake-autorate-probe: tc not found" >&2; exit 1; }
 command -v fping >/dev/null || { echo "cake-autorate-probe: fping not found" >&2; exit 1; }
+
+# No -i: ask SQM what it shapes, and say out loud what that turned out to be.
+# A measurement whose subject is implicit is a measurement nobody can repeat.
+if [ -z "$IFACE" ]; then
+	IFACE=$(derive_iface_from_sqm) || exit 1
+	echo "cake-autorate-probe: no -i given: measuring $IFACE, the egress SQM is configured to shape"
+fi
+
 tc qdisc show dev "$IFACE" 2>/dev/null | grep -q '^qdisc cake' || {
 	echo "cake-autorate-probe: no cake qdisc on $IFACE -- is SQM running? (-i names the egress interface)" >&2; exit 1; }
 
