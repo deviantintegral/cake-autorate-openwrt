@@ -26,7 +26,7 @@ The runner **discovers** suites rather than listing them:
 
 | Glob | Kind |
 | --- | --- |
-| `tests/*/test-*.sh` | plain shell — bridge, schema, rpcd, service, statistics, regression |
+| `tests/*/test-*.sh` | plain shell — bridge, schema, rpcd, service, statistics, probe, regression |
 | `luci/luci-app-cake-autorate/tests/*.test.js` | node — `options.js` and `live.js` logic |
 
 That is deliberate. The suites used to be enumerated in `AGENTS.md` prose and

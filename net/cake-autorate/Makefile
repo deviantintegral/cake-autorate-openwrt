@@ -140,6 +140,19 @@ define Package/cake-autorate/install
 	$(INSTALL_BIN) ./files/cake-autorate-bridge.sh \
 		$(1)/usr/libexec/cake-autorate/cake-autorate-bridge.sh
 
+	# --- operator diagnostic ---------------------------------------------
+	# /usr/bin, not /usr/libexec: unlike the bridge and the collectd reader,
+	# this one is typed by a human over SSH. It answers "is the loaded
+	# latency CAKE's queue, or the radio downstream of it?" -- the question
+	# that decides whether ul_owd_delta_thr_ms is set below the link's own
+	# floor, where the daemon collapses to min_ul_shaper_rate_kbps forever.
+	# No new DEPENDS: it uses tc and fping, both already required, and
+	# degrades to "generate load yourself" without the optional Ookla CLI.
+	# See docs/tuning.md.
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) ./files/cake-autorate-probe.sh \
+		$(1)/usr/bin/cake-autorate-probe
+
 	# --- collectd exec statistics source --------------------------------
 	$(INSTALL_DIR) $(1)/etc/collectd/conf.d
 	$(INSTALL_CONF) ./files/cake-autorate.collectd.conf \
