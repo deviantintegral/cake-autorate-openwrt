@@ -477,6 +477,16 @@ class Harness:
                 'LoadPlugin rrdtool\n<Plugin rrdtool>\n  DataDir "/var/lib/collectd/rrd"\n</Plugin>\n'
                 'Include "/etc/collectd/conf.d/*.conf"\n')
         self.g("mkdir -p /var/lib/collectd/rrd; cat > /tmp/collectd-it.conf <<'EOF'\n%sEOF\necho wrote" % conf)
+        # No induced load is needed here, and that is worth stating because the
+        # reader publishes only FRESH samples: it will not republish a SUMMARY
+        # line the daemon wrote before it went to sleep, so on a link that has
+        # gone quiet there are legitimately no metrics and no RRDs (see "Gaps in
+        # the graphs are expected on an idle link" in docs/configuration.md).
+        # This harness never reaches that state -- its fixture sets
+        # enable_sleep_function=0 on both instances, so the daemon keeps writing
+        # SUMMARY lines whether or not traffic is flowing and every sample is
+        # current. The idle-link behaviour is covered off-device instead, by
+        # tests/statistics/test-collectd-parser.sh.
         # stop any stock collectd, start ours with the explicit config
         self.g("/etc/init.d/collectd stop 2>/dev/null; killall collectd 2>/dev/null; sleep 1; "
                "collectd -C /tmp/collectd-it.conf 2>&1 | tail -3; echo started")

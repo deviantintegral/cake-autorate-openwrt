@@ -48,6 +48,18 @@
 #   load level 0/1/2. Keep this identical to the rpcd status backend, which
 #   parses the same field.
 #
+# ONLY FRESH SAMPLES ARE PUBLISHED:
+#   The daemon stops writing SUMMARY lines altogether while it sleeps through an
+#   idle link (upstream's sleep function: no SUMMARY output between
+#   sustained_idle_sleep_thr_s of sub-connection_active_thr_kbps traffic and the
+#   next burst above that threshold). The newest SUMMARY line then just sits
+#   there, and because PUTVAL stamps values with N: (= now), republishing it
+#   would record a minutes-old measurement as a fresh sample -- a flat line on
+#   the graph that is indistinguishable from a genuinely steady link. So a line
+#   older than MAX_SAMPLE_AGE_S is not published at all: an idle link reads as a
+#   gap, which is the truth -- documented for users under "Gaps in the graphs
+#   are expected on an idle link" in docs/configuration.md.
+#
 # MODES:
 #   * No arguments  (collectd exec):  loop until orphaned, once per
 #     $COLLECTD_INTERVAL, over /var/log/cake-autorate.*.log (falling back to
@@ -61,6 +73,29 @@ HOSTNAME="${COLLECTD_HOSTNAME:-localhost}"
 INTERVAL="${COLLECTD_INTERVAL:-30}"
 INTERVAL="${INTERVAL%%.*}"                 # collectd may pass a float; want int
 [ -n "$INTERVAL" ] && [ "$INTERVAL" -ge 1 ] 2>/dev/null || INTERVAL=30
+
+# How old the newest SUMMARY line may be and still be published, in seconds.
+#
+# Two collection intervals is the usual RRD heartbeat rule -- one missed read is
+# tolerated, two is a gap -- with a 60 s floor so that a short COLLECTD_INTERVAL
+# cannot manufacture gaps. There is a wide margin either way: an awake daemon
+# writes a SUMMARY per processed ping response (~20/s at the default 6 pingers /
+# 0.3 s), so a live sample is always well under a second old, while a sleeping
+# one writes nothing at all.
+#
+# CAKE_AUTORATE_MAX_SAMPLE_AGE_S overrides it (whole seconds; the tests use it to
+# pin a threshold instead of racing the clock).
+MAX_SAMPLE_AGE_S="${CAKE_AUTORATE_MAX_SAMPLE_AGE_S:-}"
+case "$MAX_SAMPLE_AGE_S" in
+	''|*[!0-9]*)
+		MAX_SAMPLE_AGE_S=$((INTERVAL * 2))
+		[ "$MAX_SAMPLE_AGE_S" -ge 60 ] || MAX_SAMPLE_AGE_S=60
+		;;
+esac
+
+# Wall-clock seconds, refreshed once per pass by one_pass(). Empty when the
+# clock cannot be read, which switches the freshness check off (see below).
+NOW_S=''
 
 LOG_GLOB='/var/log/cake-autorate.*.log'
 
@@ -105,6 +140,29 @@ newest_summary_line() {
 			if (ends_nl && ok) last = prev
 			if (last != "") print last
 		}
+	'
+}
+
+# summary_is_fresh <summary_line> -- true when the line was written within
+# MAX_SAMPLE_AGE_S of NOW_S.
+#
+# Field 2 (awk $3) is LOG_TIMESTAMP, upstream's ${EPOCHREALTIME} at the moment
+# log_msg ran: epoch seconds with a fractional part, on the same wall clock this
+# script reads. Two ways of not knowing the age both FAIL OPEN and publish the
+# sample, because a feed that keeps working on a router with a broken clock or
+# against a future log format beats one that silently goes dark:
+#   * NOW_S unreadable (no usable date(1));
+#   * LOG_TIMESTAMP absent or not a number.
+# A future-dated sample (negative age -- an NTP step, or a clock that has yet to
+# sync after boot) counts as fresh for the same reason.
+summary_is_fresh() {
+	[ -n "$NOW_S" ] || return 0                # no clock: publish regardless
+	printf '%s\n' "$1" | awk -F'; ' -v now="$NOW_S" -v maxage="$MAX_SAMPLE_AGE_S" '
+		{
+			if ($3 !~ /^[0-9]+(\.[0-9]+)?$/) { fresh = 1; exit }
+			fresh = ((now - $3) <= maxage)
+		}
+		END { exit fresh ? 0 : 1 }
 	'
 }
 
@@ -162,10 +220,21 @@ process_file() {
 	[ -n "$line" ] || line=$(newest_summary_line "$logf.old")
 	[ -n "$line" ] || return 0
 
+	# Publish nothing rather than republishing a sample the daemon wrote before
+	# it went to sleep; see "ONLY FRESH SAMPLES ARE PUBLISHED" at the top.
+	summary_is_fresh "$line" || return 0
+
 	emit_metrics "$inst" "$line"
 }
 
 one_pass() {
+	# One clock reading per pass, so every instance in a multi-WAN setup is aged
+	# against the same instant.
+	NOW_S=$(date +%s 2>/dev/null) || NOW_S=''
+	case "$NOW_S" in
+		*[!0-9]*) NOW_S='' ;;
+	esac
+
 	if [ "$#" -gt 0 ]; then
 		# explicit file list (tests / manual invocation)
 		for logf in "$@"; do
