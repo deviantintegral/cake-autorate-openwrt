@@ -557,6 +557,84 @@ class Harness:
         except Exception as e:  # connection refused / reset / timeout
             return None, str(e)
 
+    def enable_statistics(self):
+        """Serve mode only, opt-in: make Statistics -> Graphs actually hold a
+        populated CAKE Autorate dashboard, for the docs screenshot suite.
+
+        luci-app-statistics is ALREADY here -- luci-app-cake-autorate depends
+        on it -- so this is not about installing anything. What is missing on a
+        stock box is the data, for two reasons this method fixes: collectd is
+        never told to read the package's drop-in (see below), and a VM minutes
+        old has nothing to graph.
+
+        Off by default (CA_UI_STATISTICS=1 turns it on) because the warm-up
+        costs ten minutes of wall-clock, and because the demo-box collectd
+        settings it applies are not the ones a real install runs.
+
+        Returns True when the CAKE Autorate RRDs exist.
+        """
+        self.log("== installing + warming luci-app-statistics ==")
+        # Normally a no-op -- luci-app-cake-autorate DEPENDS on this, so it came
+        # in with the package. Kept so the method also works against an endpoint
+        # where only the base package is installed.
+        rc, out = self.g("apk add --allow-untrusted luci-app-statistics 2>&1 | tail -6",
+                         t=500, capture="apk-statistics.txt")
+        if "ERROR" in out:
+            self.log("statistics: apk add failed: %s" % out.strip()[-200:])
+            return False
+
+        # THE line that makes the package's own drop-in load. luci-app-statistics
+        # replaces /etc/collectd.conf with a symlink to a config it generates
+        # from UCI, and the /etc/config/luci_statistics it ships in 25.12.5 has
+        # `option Include` COMMENTED OUT (checked in the published apk, not just
+        # the feed source). Without setting it, /etc/collectd/conf.d/
+        # cake-autorate.conf is never read and the graphs stay empty however
+        # long you wait -- which is a real gap for users too, not a VM quirk;
+        # docs/configuration.md carries the same one-liner.
+        #
+        # Interval 10 (stock 30) and a 15min RRA are demo-box settings: this VM
+        # is minutes old, and on the stock 2hour axis a few minutes of samples
+        # is a sliver against an empty plot. default_timespan must name one of
+        # RRATimespans or the span selector falls back to the first entry.
+        self.g("uci set luci_statistics.collectd.Include='/etc/collectd/conf.d'; "
+               "uci set luci_statistics.collectd.Interval='10'; "
+               "uci set luci_statistics.collectd_rrdtool.RRATimespans='15min 2hour 1day 1week 1month 1year'; "
+               "uci set luci_statistics.rrdtool.default_timespan='15min'; "
+               "uci commit luci_statistics; echo stats-uci-set")
+        self.g("/etc/init.d/luci_statistics enable 2>/dev/null; "
+               "/etc/init.d/luci_statistics restart 2>&1 | tail -3; sleep 3; echo stats-started")
+
+        rc, conf = self.g("grep -n 'Include\\|cake' /etc/collectd.conf 2>&1 | head -10",
+                          capture="serve-collectd-conf.txt")
+        self.log("statistics: generated collectd.conf -> %s" % conf.strip()[:200])
+
+        # Real traffic for the graph to show. cake-autorate only moves the
+        # shaper when there is load to react to; without this every series is a
+        # flat line at base and the screenshot says nothing about what the
+        # dashboard is for.
+        loadurl = ("http://downloads.openwrt.org/releases/25.12.5/targets/x86/64/"
+                   "openwrt-25.12.5-x86-64-generic-ext4-combined.img.gz")
+        self.g("( for i in $(seq 1 200); do wget -q -O /dev/null '%s' 2>/dev/null; done ) "
+               ">/dev/null 2>&1 & echo load-started" % loadurl)
+
+        warm = int(os.environ.get("CA_UI_STATS_WARMUP_S", "600"))
+        self.log("statistics: warming for %ds (load running)" % warm)
+        deadline = time.time() + warm
+        listing = ""
+        while time.time() < deadline:
+            time.sleep(20)
+            rc, listing = self.g("find /tmp/rrd -path '*cake_autorate-*' -name '*.rrd' "
+                                 "2>/dev/null | sort")
+            n = len([l for l in listing.splitlines() if l.strip().endswith(".rrd")])
+            self.log("  statistics: %d cake_autorate RRD(s) so far" % n)
+        self.g("pkill -f 'wget -q -O /dev/null' 2>/dev/null; echo load-stopped")
+        self.artifact("serve-statistics-rrds.txt", listing)
+
+        ok = "cake_autorate-" in listing
+        if not ok:
+            self.log("statistics: NO cake_autorate RRDs -- graphs will be empty")
+        return ok
+
     def enable_luci(self):
         self.log("== bringing up LuCI (uhttpd + root password) ==")
         pw = self.args.root_password
@@ -621,7 +699,7 @@ class Harness:
         self.artifact("serve-luci-probe.txt", detail + "\n")
         return ok
 
-    def write_ready(self):
+    def write_ready(self, statistics=False):
         import json
         base = "http://%s:%d" % (self.args.serve_host, self.args.serve_port)
         info = {
@@ -630,6 +708,11 @@ class Harness:
             "luci_url": base + "/cgi-bin/luci/",
             "overview_path": "/cgi-bin/luci/admin/network/cake-autorate/overview",
             "status_path": "/cgi-bin/luci/admin/network/cake-autorate/status",
+            # False unless CA_UI_STATISTICS=1 brought luci-app-statistics up
+            # AND cake_autorate RRDs appeared; the docs suite skips its
+            # statistics screenshot rather than capture an empty dashboard.
+            "statistics_path": "/cgi-bin/luci/admin/statistics/graphs",
+            "statistics": bool(statistics),
             "username": "root",
             "password": self.args.root_password,
             "pid": os.getpid(),
@@ -683,8 +766,11 @@ class Harness:
             self.install()
             self.configure_network_and_sqm()
             self.configure_cake_autorate()
+            stats = False
+            if os.environ.get("CA_UI_STATISTICS") == "1":
+                stats = self.enable_statistics()
             if self.enable_luci():
-                self.write_ready()
+                self.write_ready(statistics=stats)
                 rc = 0
                 self.serve_wait()
         except VMError as e:

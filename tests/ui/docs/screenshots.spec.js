@@ -130,6 +130,44 @@ test.describe('docs screenshots', () => {
     await capture(page, 'config-search');
   });
 
+  /*
+   * The collectd statistics dashboard.
+   *
+   * Needs a live luci-app-statistics with real cake_autorate RRDs behind it,
+   * which only CA_UI_STATISTICS=1 sets up (see tests/integration/lib/
+   * harness.py enable_statistics). Skip loudly rather than capture an empty
+   * "No RRD data found" modal and commit it as documentation.
+   */
+  test('statistics: CAKE Autorate graphs', async ({ page, luci }) => {
+    test.skip(!luci.statistics,
+      'no populated luci-app-statistics on this endpoint -- regenerate with '
+      + 'CA_UI_STATISTICS=1 (see docs/testing.md#documentation-screenshots)');
+
+    await page.goto(luci.url(luci.statisticsPath), { waitUntil: 'domcontentloaded' });
+
+    // luci-app-statistics builds one tab per collectd plugin that has both RRDs
+    // and a definition file; ours is named for the plugin the exec reader emits
+    // under, so this locator is also the assertion that cake_autorate.js was
+    // found and loaded.
+    const tab = page.locator('li[data-tab="cake_autorate"]');
+    await expect(tab).toBeVisible();
+    await tab.click();
+
+    // Graphs are rendered server-side by rrdtool and handed back as PNG blobs,
+    // so "the tab is active" is not "the graphs are drawn" -- wait for the
+    // images themselves.
+    const pane = page.locator('[data-plugin="cake_autorate"]').first();
+    await expect(pane.locator('img').first()).toBeVisible({ timeout: 60000 });
+    // Every panel in the group, not just the first to arrive.
+    await expect.poll(() => pane.locator('img').count(), { timeout: 60000 })
+      .toBeGreaterThan(1);
+
+    await page.screenshot({
+      path: path.join(OUT, 'statistics-graphs.png'),
+      fullPage: true,
+    });
+  });
+
   /* Two instances = two WANs, for the multi-instance section of the docs. */
   test('config: multi-instance', async ({ page, luci }) => {
     await gotoConfig(page, luci);

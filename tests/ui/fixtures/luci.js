@@ -40,6 +40,12 @@ function makeLuci(state) {
       || '/cgi-bin/luci/admin/network/cake-autorate/overview',
     statusPath: state.status_path
       || '/cgi-bin/luci/admin/network/cake-autorate/status',
+    statisticsPath: state.statistics_path
+      || '/cgi-bin/luci/admin/statistics/graphs',
+    // True only when the endpoint really has luci-app-statistics AND
+    // cake_autorate RRDs behind it (CA_UI_STATISTICS=1). Specs that need the
+    // graphs skip on false rather than screenshot an empty dashboard.
+    statistics: !!state.statistics,
     url(p) {
       if (!p) return baseUrl + '/';
       return baseUrl + (p.startsWith('/') ? p : '/' + p);
