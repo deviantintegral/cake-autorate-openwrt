@@ -112,9 +112,9 @@ var OPTIONS = [
 	{ name: 'reflector_comparison_interval_mins', group: 'reflectors', type: 'integer',
 	  desc: 'How often, in minutes, live reflectors are compared against each other, which is what drives the REFLECTOR log lines.' },
 	{ name: 'reflector_sum_owd_baselines_delta_thr_ms', group: 'reflectors', type: 'float',
-	  desc: 'How far in milliseconds a reflector summed one-way-delay baselines may exceed the lowest of them before it is rotated out.' },
+	  desc: 'How far in milliseconds a reflector\'s summed one-way-delay baselines may exceed the lowest of them before it is rotated out.' },
 	{ name: 'reflector_owd_delta_ewma_delta_thr_ms', group: 'reflectors', type: 'float',
-	  desc: 'How far in milliseconds a reflector one-way-delay delta EWMA may exceed the lowest of them before it is rotated out.' },
+	  desc: 'How far in milliseconds a reflector\'s one-way-delay delta EWMA may exceed the lowest of them before it is rotated out.' },
 
 	/* ---- detection (10) ------------------------------------------------ */
 	{ name: 'dl_owd_delta_thr_ms', group: 'detection', type: 'float',
