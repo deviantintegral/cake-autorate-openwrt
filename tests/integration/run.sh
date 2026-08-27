@@ -48,6 +48,12 @@ SERVE=""
 #   CA_UI_ROOT_PASSWORD  root password set for LuCI login      (default cakeautorate)
 #   CA_UI_READY_FILE     JSON file written when LuCI is live    (required)
 #   CA_UI_STOP_FILE      touch this file to shut the VM down    (required)
+#   CA_UI_STATISTICS     1 = point collectd at the package's conf.d drop-in and
+#                        collect real cake-autorate metrics before reporting
+#                        ready, so the docs suite can shoot a populated
+#                        Statistics dashboard. Off by default: the warm-up costs
+#                        ten minutes and the collectd settings are demo-box ones.
+#   CA_UI_STATS_WARMUP_S seconds to collect for under load        (default 600)
 [ "${1:-}" = "--serve" ] && SERVE="1"
 
 log() { printf '%s\n' "== $* ==" >&2; }

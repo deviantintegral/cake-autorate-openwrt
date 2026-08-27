@@ -32,8 +32,19 @@ const RUN_SH = path.join(REPO_ROOT, 'tests', 'integration', 'run.sh');
 const SERVE_PORT = process.env.CA_UI_SERVE_PORT || '8080';
 const SERVE_HOST = process.env.CA_UI_SERVE_HOST || '127.0.0.1';
 const ROOT_PW = process.env.CA_UI_ROOT_PASSWORD || 'cakeautorate';
+// Opt-in: wire collectd up to the package's drop-in and let it gather real
+// cake-autorate metrics, so the docs suite can capture a populated Statistics
+// dashboard. (luci-app-statistics itself is always present -- the LuCI app
+// depends on it; what is missing by default is the data.) Off by default: the
+// warm-up costs ten minutes, and the collectd settings it applies are demo-box
+// ones, not what a real install runs.
+const STATISTICS = process.env.CA_UI_STATISTICS === '1';
+const STATS_WARMUP_S = process.env.CA_UI_STATS_WARMUP_S || '600';
 // apk install pulls deps from the network; allow a generous first-boot budget.
-const READY_TIMEOUT_MS = parseInt(process.env.CA_UI_READY_TIMEOUT_MS || '900000', 10);
+// The statistics warm-up is spent BEFORE the VM reports ready, so add it (plus
+// the extra apk work) to the budget rather than timing out mid-collection.
+const READY_TIMEOUT_MS = parseInt(process.env.CA_UI_READY_TIMEOUT_MS
+  || (STATISTICS ? String(900000 + (parseInt(STATS_WARMUP_S, 10) + 300) * 1000) : '900000'), 10);
 
 function writeState(obj) {
   fs.writeFileSync(STATE_FILE, JSON.stringify(obj, null, 2));
@@ -80,6 +91,11 @@ module.exports = async function globalSetup() {
       luci_url: base + '/cgi-bin/luci/',
       overview_path: '/cgi-bin/luci/admin/network/cake-autorate/overview',
       status_path: '/cgi-bin/luci/admin/network/cake-autorate/status',
+      statistics_path: '/cgi-bin/luci/admin/statistics/graphs',
+      // An external endpoint is somebody else's box: we cannot know whether it
+      // has luci-app-statistics with cake_autorate RRDs, so say so explicitly
+      // unless the caller asserts it.
+      statistics: process.env.CA_UI_STATISTICS === '1',
       username: process.env.CA_UI_USERNAME || 'root',
       password: process.env.CA_UI_ROOT_PASSWORD || '',
     });
@@ -102,6 +118,8 @@ module.exports = async function globalSetup() {
       CA_UI_SERVE_PORT: String(SERVE_PORT),
       CA_UI_SERVE_HOST: SERVE_HOST,
       CA_UI_ROOT_PASSWORD: ROOT_PW,
+      CA_UI_STATISTICS: STATISTICS ? '1' : '',
+      CA_UI_STATS_WARMUP_S: STATS_WARMUP_S,
     },
   });
   child.unref();
@@ -121,6 +139,8 @@ module.exports = async function globalSetup() {
         luci_url: info.luci_url,
         overview_path: info.overview_path,
         status_path: info.status_path,
+        statistics_path: info.statistics_path,
+        statistics: !!info.statistics,
         username: info.username,
         password: info.password,
         harness_pid: info.pid,
