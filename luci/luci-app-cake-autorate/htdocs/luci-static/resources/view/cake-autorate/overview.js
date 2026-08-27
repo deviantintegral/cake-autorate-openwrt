@@ -53,13 +53,13 @@ var TABS = [
 	{ id: 'essentials', title: _('Essentials'),
 	  descr: _('Required configuration to use cake-autorate. You must set all of these options, even if upload or download shaping is disabled.') },
 	{ id: 'shaper', title: _('Shaper rates & response'),
-	  descr: _('How aggressively the shaper rate is moved up and down in response to load and bufferbloat.'), doc: true },
+	  descr: _('How aggressively the shaper rate is moved up and down in response to load and bufferbloat.') },
 	{ id: 'pingers', title: _('Pingers'),
 	  descr: _('Which probe binary is used and how many reflectors are pinged how often.') },
 	{ id: 'reflectors', title: _('Reflectors'),
-	  descr: _('The pool of ICMP targets and how misbehaving ones are detected and rotated out.'), doc: true },
+	  descr: _('The pool of ICMP targets and how misbehaving ones are detected and rotated out.') },
 	{ id: 'detection', title: _('Delay & bufferbloat detection'),
-	  descr: _('One-way-delay thresholds and the EWMA smoothing that decide when the link is bufferbloated.'), doc: true },
+	  descr: _('One-way-delay thresholds and the EWMA smoothing that decide when the link is bufferbloated.') },
 	{ id: 'idle', title: _('Idle, sleep & stalls'),
 	  descr: _('When the connection counts as idle or stalled and how the pingers sleep to save CPU.') },
 	{ id: 'logging', title: _('Logging & output'),
@@ -207,16 +207,6 @@ function rateOrderMessage(dir, err) {
 		default:
 			return _('Minimum %s rate (%d) must not exceed the maximum %s rate (%d).').format(d, err.a, d, err.b);
 	}
-}
-
-/* A tab description node with an optional upstream documentation link. */
-function tabDescr(tab) {
-	if (!tab.doc)
-		return tab.descr;
-	return E('span', {}, [
-		tab.descr, ' ',
-		E('a', { 'href': DOC_URL, 'target': '_blank', 'rel': 'noreferrer' }, DOC_TITLE + ' →')
-	]);
 }
 
 /* --- search/filter -------------------------------------------------------
@@ -385,8 +375,23 @@ return view.extend({
 			return el;
 		};
 
+		/*
+		 * Tab descriptions are STRINGS, never DOM nodes.
+		 *
+		 * s.tab() is called once for the section type, but renderTabContainers
+		 * runs per instance and appends whatever `description` holds into that
+		 * instance's pane. A string is re-created each time; a node is one
+		 * object, so appending it to the second instance MOVES it out of the
+		 * first. Three tabs used to carry a node here -- a description plus a
+		 * documentation link -- and on a two-WAN box those three tabs showed no
+		 * description at all on every instance but the last.
+		 *
+		 * The link that made them nodes is gone rather than fixed: it pointed at
+		 * the same repository root as the link in the page header, a few lines
+		 * above, with no anchor to distinguish it.
+		 */
 		TABS.forEach(function (t) {
-			s.tab(t.id, t.title, tabDescr(t));
+			s.tab(t.id, t.title, t.descr);
 		});
 
 		/* The procd gate. Not one of the 66 upstream options and never written
