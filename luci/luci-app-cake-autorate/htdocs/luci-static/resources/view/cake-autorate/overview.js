@@ -51,7 +51,7 @@ var callSqmInterfaces = rpc.declare({
 
 var TABS = [
 	{ id: 'essentials', title: _('Essentials'),
-	  descr: _('The minimum a fresh instance needs: the two interfaces and the min/base/max shaper rates for each direction. Everything else has a working default.') },
+	  descr: _('Required configuration to use cake-autorate. You must set all of these options, even if upload or download shaping is disabled.') },
 	{ id: 'shaper', title: _('Shaper rates & response'),
 	  descr: _('How aggressively the shaper rate is moved up and down in response to load and bufferbloat.'), doc: true },
 	{ id: 'pingers', title: _('Pingers'),
