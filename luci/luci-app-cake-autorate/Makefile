@@ -10,10 +10,16 @@ LUCI_TITLE:=LuCI support for cake-autorate
 LUCI_DESCRIPTION:=Configuration and live status UI for cake-autorate, the \
 	adaptive-bandwidth controller for CAKE SQM.
 # luci-app-statistics is required, not optional: this package ships a graph
-# definition into its rrdtool/definitions tree, and luci-app-statistics is what
-# points collectd's Include at /etc/collectd/conf.d, where the base package
-# drops its exec source. Without it there is no Statistics -> Graphs menu and
-# the graphs never get any data. Same arrangement collectd-mod-sqm uses.
+# definition into its rrdtool/definitions tree, which is dead weight without the
+# app that reads it -- there would be no Statistics -> Graphs menu at all. Same
+# arrangement collectd-mod-sqm uses.
+#
+# It does NOT, however, wire collectd up for us. luci-app-statistics generates
+# /etc/collectd.conf from UCI and the /etc/config/luci_statistics it ships in
+# 25.12.5 has `option Include '/etc/collectd/conf.d'` COMMENTED OUT, so the base
+# package's exec drop-in in that directory is never read and the graphs stay
+# empty. Users have to set it themselves; docs/configuration.md carries the
+# one-liner under "Statistics caveat".
 LUCI_DEPENDS:=+cake-autorate +luci-base +luci-app-statistics
 LUCI_PKGARCH:=all
 

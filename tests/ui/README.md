@@ -20,6 +20,8 @@ project.
         02-instance-crud.spec.js
         03-essentials-only.spec.js
         04-status-controls.spec.js
+        05-rate-validation.spec.js
+      docs/screenshots.spec.js   generator for docs/images/ (asserts nothing)
       # task 12 adds:  visual/ + screenshot baselines
 
 `node_modules/`, `.runtime/`, `test-results/`, `playwright-report/` are
@@ -36,6 +38,13 @@ gitignored. Browser binaries live in `~/.cache/ms-playwright` (never in-repo).
     cd tests/ui
     npx playwright test --project=functional     # DOM/behaviour assertions
     npx playwright test --project=visual         # full-page screenshot diffs
+    npx playwright test --project=docs           # regenerates docs/images/*.png
+
+Run `docs` on its own, and never after `visual`: the visual specs delete their
+way down to an empty config on purpose (the VM is thrown away afterwards), so a
+docs run sharing that VM would photograph the wreckage. Its statistics
+screenshot additionally needs `CA_UI_STATISTICS=1` — see
+[`docs/testing.md`](../../docs/testing.md#documentation-screenshots).
 
 Requires KVM (the suite boots a QEMU VM). Without a live LuCI every spec
 **skips** (never fails) — see "No live LuCI" below. Set `CA_IT_REQUIRE_KVM=1` to
