@@ -42,14 +42,19 @@
     },
     {
       "customType": "regex",
-      "description": "Upstream lynxthecat/cake-autorate release built by the OpenWrt package",
+      "description": "Upstream lynxthecat/cake-autorate release built by the OpenWrt package. One pin, restated wherever the tree STATES WHAT WE SHIP: the Makefile that builds it, the LuCI footer that shows it to the user, and the two prose files that name it. All of them are one dep, so a bump arrives as a single PR and the LuCI page cannot claim a version the feed does not build -- it did exactly that before, because this manager was scoped to the Makefile alone. DELIBERATELY NOT LISTED: docs/upstream-option-inventory.md, docs/uci-schema.md, options.js and the AGENTS.md patch notes. Those are not the pin, they are CLAIMS SOMEONE VERIFIED AGAINST A TAG (the 66-option inventory, the tarball SHA-256, whether upstream has shipped a fix yet), and rewriting the number under a claim nobody re-checked would turn a stale doc into a confidently wrong one. tests/regression/test-upstream-version-pin.sh enforces both halves: the restatements below must equal PKG_VERSION, and the inventory must be re-verified before its tag may move. As with the OpenWrt manager, no two patterns may match the same literal, and RE2 gives us no lookaround -- each is anchored on the token before the version instead.",
       "managerFilePatterns": [
-        "/^net/cake-autorate/Makefile$/"
+        "/^net/cake-autorate/Makefile$/",
+        "/^luci/luci-app-cake-autorate/htdocs/luci-static/resources/view/cake-autorate/overview\\.js$/",
+        "/^(README|AGENTS)\\.md$/"
       ],
       "matchStringsStrategy": "any",
       "matchStrings": [
         "PKG_VERSION:=(?<currentValue>\\d+\\.\\d+\\.\\d+)",
-        "tag v(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+        "cake-autorate tag v(?<currentValue>\\d+\\.\\d+\\.\\d+)",
+        "UPSTREAM_VERSION = '(?<currentValue>\\d+\\.\\d+\\.\\d+)'",
+        "pinned to tag \\*\\*v(?<currentValue>\\d+\\.\\d+\\.\\d+)\\*\\*",
+        "lynxthecat/cake-autorate v(?<currentValue>\\d+\\.\\d+\\.\\d+)"
       ],
       "depNameTemplate": "lynxthecat/cake-autorate",
       "datasourceTemplate": "github-tags",
@@ -82,7 +87,8 @@
         "**Manual follow-up required before this can merge.**",
         "- `net/cake-autorate/Makefile`: `PKG_HASH` still names the OLD tarball. Regenerate it with `make package/cake-autorate/download V=s` in the SDK, or `curl -sL 'https://codeload.github.com/lynxthecat/cake-autorate/tar.gz/refs/tags/v<version>' | sha256sum`.",
         "- Leave `PKG_RELEASE` ALONE. `.github/scripts/package-versions.sh` owns it and resets it to 1 on an upstream bump; `release.yml` runs the check before it will publish a tag, so a stale value is caught there with the expected number. Two owners for one field is how v0.1.0 and v0.2.0 came to ship different payloads under the same `-r1`.",
-        "- Re-check `docs/upstream-option-inventory.md` and the UCI bridge for options added, renamed or removed upstream."
+        "- Re-check `docs/upstream-option-inventory.md` and the UCI bridge for options added, renamed or removed upstream. `tests/regression/test-upstream-version-pin.sh` FAILS until you do: the inventory records the tag it was cut against, and this PR has moved past it. Re-run the extraction in that doc's section 1, refresh the tag/commit/date/size/SHA-256 table and the 66-row inventory, then update its `Pinned tag` row. Do not just edit the number.",
+        "- The doc literals that are NOT auto-rewritten are deliberate -- `docs/uci-schema.md`'s example path, `options.js`'s 66-option claim and the AGENTS.md patch notes all describe a tag someone inspected, not the pin. If one of them now reads wrong, fix the prose; do not add it to the custom manager."
       ]
     },
     {
