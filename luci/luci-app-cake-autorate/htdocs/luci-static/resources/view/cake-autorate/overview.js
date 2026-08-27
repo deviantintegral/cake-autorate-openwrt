@@ -68,15 +68,31 @@ var TABS = [
 
 /*
  * How one underscore-separated word of a UCI option name is rendered in the
- * field title. `dl`/`ul` expand rather than shouting the upstream abbreviation
- * at the reader: nothing else in this UI says DL, the status table's own
- * columns are headed Download and Upload, and the pair is easy to misread at a
- * glance in a form where the two differ by one letter.
+ * field title.
+ *
+ * Two rules, and they pull in opposite directions on purpose. A genuine
+ * acronym (OWD, EWMA, CAKE) is written the way its field is discussed
+ * everywhere else, in capitals. Everything else is a TRUNCATION -- min, max,
+ * thr, avg, args, if, no -- and truncations are expanded, because a form is
+ * read by someone who does not yet know the vocabulary and "Min" is only
+ * shorter for the person who already did.
+ *
+ * `dl`/`ul` sit in the second group despite looking like the first: nothing
+ * else in this UI says DL, the status table's own columns are headed Download
+ * and Upload, and the two differ by one letter in a form that lists both.
+ *
+ * A mapped word is emitted VERBATIM (only unmapped words get capitalised by
+ * humanize), so every value here carries its own casing.
  */
 var ACRONYMS = {
-	dl: 'Download', ul: 'Upload', owd: 'OWD', ewma: 'EWMA', kbps: 'Kbit/s',
-	ms: 'ms', kb: 'KB', thr: 'threshold', avg: 'avg', mins: 'min',
-	'if': 'interface', args: 'args'
+	/* acronyms -- kept, in their own casing */
+	owd: 'OWD', ewma: 'EWMA', cake: 'CAKE',
+	/* truncations -- expanded */
+	dl: 'Download', ul: 'Upload', min: 'Minimum', max: 'Maximum',
+	thr: 'Threshold', avg: 'Average', 'no': 'Number of', 'if': 'Interface',
+	args: 'Arguments',
+	/* units */
+	kbps: 'Kbit/s', ms: 'ms', kb: 'KB', mins: 'min'
 };
 
 function humanize(name) {
