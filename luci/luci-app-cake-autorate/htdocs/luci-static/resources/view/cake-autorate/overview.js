@@ -417,13 +417,19 @@ return view.extend({
 				E('a', { 'href': DOC_URL, 'target': '_blank', 'rel': 'noreferrer' }, DOC_TITLE)
 			]));
 
-			/* Say what the interface fields are checked against, so a missing SQM
-			 * config is not mistaken for a bug. */
-			nodes.push(E('p', { 'id': 'cake-autorate-sqm-note', 'class': 'cbi-value-description' },
-				sqm && sqm.sqm_config_present
-					? _('Interface fields are validated against the live SQM config. Egress (ul_if) choices: %s. Ingress IFB (dl_if) choices: %s.')
-						.format(ifChoices.ul.join(', ') || _('(none)'), ifChoices.dl.join(', ') || _('(none)'))
-					: _('SQM is not configured yet, so the interface fields cannot be validated against a live CAKE qdisc. Configure SQM first; the fields still accept a value.')));
+			/* The one thing this page cannot say field by field: SQM is missing
+			 * altogether, so there is no qdisc for any instance to adjust.
+			 *
+			 * Its counterpart -- naming the egress/ingress choices when SQM IS
+			 * configured -- used to sit here too and is gone: the interface
+			 * fields already offer exactly those devices in their dropdowns and
+			 * annotate the chosen one underneath, so restating the same two
+			 * lists at the top of the page was a third copy of an answer the
+			 * user is looking straight at. */
+			if (!(sqm && sqm.sqm_config_present)) {
+				nodes.push(E('p', { 'id': 'cake-autorate-sqm-note', 'class': 'cbi-value-description' },
+					_('SQM is not configured yet, so the interface fields cannot be validated against a live CAKE qdisc. Configure SQM first; the fields still accept a value.')));
+			}
 
 			if (!coverage.ok) {
 				nodes.push(E('div', { 'class': 'alert-message error' }, [
