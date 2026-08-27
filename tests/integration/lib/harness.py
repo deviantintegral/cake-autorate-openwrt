@@ -611,7 +611,16 @@ class Harness:
         self.log("statistics: warming for %ds (load running)" % warm)
         deadline = time.time() + warm
         listing = ""
+        stopf = self.args.serve_stop_file
         while time.time() < deadline:
+            # The stop-file is normally read by serve_wait(), which does not run
+            # until the VM has reported ready -- and this loop runs BEFORE that.
+            # Without checking it here, a caller that gives up mid-warm-up (the
+            # Playwright globalSetup timeout writes the file and expects the VM
+            # to go away) would be ignored for up to ten minutes.
+            if stopf and os.path.exists(stopf):
+                self.log("statistics: stop-file observed during warm-up; aborting")
+                break
             time.sleep(20)
             rc, listing = self.g("find /tmp/rrd -path '*cake_autorate-*' -name '*.rrd' "
                                  "2>/dev/null | sort")
