@@ -17,6 +17,11 @@
  *
  * type   -> widget: bool=Flag, integer/float=Value(datatype), string=Value
  *           (pinger_binary=ListValue), list=DynamicList.
+ * units  -> optional unit/range hint appended to the help text. A bool never
+ *           carries one: its widget is a checkbox, which already shows the only
+ *           two states it has, so "0 or 1" underneath restated the checkbox in
+ *           the daemon's spelling and told the reader nothing they were not
+ *           looking at.
  * lo/hi  -> optional numeric bounds turned into a LuCI datatype by the view.
  * doc    -> optional upstream doc link for a concept needing more than a sentence.
  *
@@ -53,11 +58,11 @@ var OPTIONS = [
 
 	/* ---- shaper (11) --------------------------------------------------- */
 	{ name: 'adjust_dl_shaper_rate', group: 'shaper', type: 'bool',
-	  desc: 'Apply download shaper rate changes; when off the daemon only monitors.', units: '0 or 1' },
+	  desc: 'Apply download shaper rate changes; when off the daemon only monitors.' },
 	{ name: 'adjust_ul_shaper_rate', group: 'shaper', type: 'bool',
-	  desc: 'Apply upload shaper rate changes; when off the daemon only monitors.', units: '0 or 1' },
+	  desc: 'Apply upload shaper rate changes; when off the daemon only monitors.' },
 	{ name: 'min_shaper_rates_enforcement', group: 'shaper', type: 'bool',
-	  desc: 'Drop both shapers to their minimum rates when the connection is idle or stalled.', units: '0 or 1' },
+	  desc: 'Drop both shapers to their minimum rates when the connection is idle or stalled.' },
 	{ name: 'shaper_rate_min_adjust_down_bufferbloat', group: 'shaper', type: 'float', lo: 0, hi: 1,
 	  desc: 'Smallest shaper-rate reduction factor applied on a bufferbloat event.', units: 'multiplier between 0 and 1', doc: DOC },
 	{ name: 'shaper_rate_max_adjust_down_bufferbloat', group: 'shaper', type: 'float', lo: 0, hi: 1,
@@ -93,7 +98,7 @@ var OPTIONS = [
 	  desc: 'Ordered pool of ICMP reflector IPs; the first no_pingers entries are used, the rest are spares for rotation.',
 	  units: 'a list of IPv4/IPv6 addresses, with at least as many entries as there are pingers', doc: DOC },
 	{ name: 'randomize_reflectors', group: 'reflectors', type: 'bool',
-	  desc: 'Shuffle the reflector list at startup so instances do not all hammer the same hosts.', units: '0 or 1' },
+	  desc: 'Shuffle the reflector list at startup so instances do not all hammer the same hosts.' },
 	{ name: 'reflector_health_check_interval_s', group: 'reflectors', type: 'float',
 	  desc: 'How often reflector health is evaluated.', units: 'seconds' },
 	{ name: 'reflector_response_deadline_s', group: 'reflectors', type: 'float',
@@ -135,7 +140,7 @@ var OPTIONS = [
 
 	/* ---- idle (8) ------------------------------------------------------ */
 	{ name: 'enable_sleep_function', group: 'idle', type: 'bool',
-	  desc: 'Pause all pingers when the connection has been idle, saving CPU and needless ICMP.', units: '0 or 1' },
+	  desc: 'Pause all pingers when the connection has been idle, saving CPU and needless ICMP.' },
 	{ name: 'connection_active_thr_kbps', group: 'idle', type: 'integer',
 	  desc: 'Achieved rate below which a direction counts as idle rather than low-load.', units: 'Kbit/s' },
 	{ name: 'sustained_idle_sleep_thr_s', group: 'idle', type: 'float',
@@ -153,21 +158,21 @@ var OPTIONS = [
 
 	/* ---- logging (14) -------------------------------------------------- */
 	{ name: 'output_processing_stats', group: 'logging', type: 'bool',
-	  desc: 'Emit the per-ping DATA monitoring lines (full processing detail; heavy).', units: '0 or 1' },
+	  desc: 'Emit the per-ping DATA monitoring lines (full processing detail; heavy).' },
 	{ name: 'output_load_stats', group: 'logging', type: 'bool',
-	  desc: 'Emit LOAD lines showing the achieved download and upload rates on every rate sample.', units: '0 or 1' },
+	  desc: 'Emit LOAD lines showing the achieved download and upload rates on every rate sample.' },
 	{ name: 'output_reflector_stats', group: 'logging', type: 'bool',
-	  desc: 'Emit REFLECTOR lines with per-reflector baseline/EWMA comparison data.', units: '0 or 1' },
+	  desc: 'Emit REFLECTOR lines with per-reflector baseline/EWMA comparison data.' },
 	{ name: 'output_summary_stats', group: 'logging', type: 'bool', managed: true,
-	  desc: 'Emit the condensed SUMMARY lines. Package-managed: the service forces this on so the status view and collectd have data to parse.', units: '0 or 1' },
+	  desc: 'Emit the condensed SUMMARY lines. Package-managed: the service forces this on so the status view and collectd have data to parse.' },
 	{ name: 'output_cake_changes', group: 'logging', type: 'bool',
-	  desc: 'Emit a SHAPER line for every tc qdisc change the daemon issues.', units: '0 or 1' },
+	  desc: 'Emit a SHAPER line for every tc qdisc change the daemon issues.' },
 	{ name: 'debug', group: 'logging', type: 'bool',
-	  desc: 'Emit DEBUG lines to the log; the packaged default is off to spare tmpfs RAM.', units: '0 or 1' },
+	  desc: 'Emit DEBUG lines to the log; the packaged default is off to spare tmpfs RAM.' },
 	{ name: 'log_DEBUG_messages_to_syslog', group: 'logging', type: 'bool', managed: true,
-	  desc: 'Also send every DEBUG record to syslog (very high volume). Package-managed: the service forces this off.', units: '0 or 1' },
+	  desc: 'Also send every DEBUG record to syslog (very high volume). Package-managed: the service forces this off.' },
 	{ name: 'log_to_file', group: 'logging', type: 'bool', managed: true,
-	  desc: 'Write the log stream to the log file. Package-managed: the service forces this on, because a supervised background service has no terminal to write to.', units: '0 or 1' },
+	  desc: 'Write the log stream to the log file. Package-managed: the service forces this on, because a supervised background service has no terminal to write to.' },
 	{ name: 'log_file_max_time_mins', group: 'logging', type: 'integer', lo: 1,
 	  desc: 'Rotate the log file once this many minutes of log lines have accumulated.', units: 'minutes, more than 0' },
 	{ name: 'log_file_max_size_KB', group: 'logging', type: 'integer', lo: 1,
@@ -179,7 +184,7 @@ var OPTIONS = [
 	{ name: 'log_file_buffer_timeout_ms', group: 'logging', type: 'integer',
 	  desc: 'Flush the log buffer after this long even if it is not full.', units: 'milliseconds' },
 	{ name: 'log_file_export_compress', group: 'logging', type: 'bool',
-	  desc: 'gzip exported log files and append .gz to the export filename.', units: '0 or 1' }
+	  desc: 'gzip exported log files and append .gz to the export filename.' }
 ];
 
 /* Expected per-group counts (docs/uci-schema.md section 6). */
