@@ -188,16 +188,21 @@ function describe(opt) {
 /*
  * Turn a checkRateOrder() code into a sentence that names the two fields in the
  * words the form uses, states the rule, and shows the values that broke it.
+ *
+ * BOTH fields are named in full, direction included. "must not exceed the base
+ * rate" leaves the reader to work out which base -- and this form has two of
+ * every rate, so an error raised on the upload trio while the eye is on the
+ * download one is exactly the case worth being unambiguous about.
  */
 function rateOrderMessage(dir, err) {
 	var d = (dir === 'dl') ? _('download') : _('upload');
 	switch (err.code) {
 		case 'min-gt-base':
-			return _('Minimum %s rate (%d) must not exceed the base rate (%d).').format(d, err.a, err.b);
+			return _('Minimum %s rate (%d) must not exceed the base %s rate (%d).').format(d, err.a, d, err.b);
 		case 'max-lt-base':
-			return _('Maximum %s rate (%d) must not be below the base rate (%d).').format(d, err.a, err.b);
+			return _('Maximum %s rate (%d) must not be below the base %s rate (%d).').format(d, err.a, d, err.b);
 		default:
-			return _('Minimum %s rate (%d) must not exceed the maximum rate (%d).').format(d, err.a, err.b);
+			return _('Minimum %s rate (%d) must not exceed the maximum %s rate (%d).').format(d, err.a, d, err.b);
 	}
 }
 
