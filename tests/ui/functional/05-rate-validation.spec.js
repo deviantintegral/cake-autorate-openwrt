@@ -53,7 +53,7 @@ test.describe('cake-autorate config: shaper-rate ordering', () => {
     const modal = page.locator('#modal_overlay');
     await expect(modal).toBeVisible();
     await expect(modal).toContainText(
-      /Minimum download rate \(9000\) must not exceed the base rate \(5000\)/i);
+      /Minimum download rate \(9000\) must not exceed the base download rate \(5000\)/i);
     await modal.getByRole('button', { name: 'Dismiss' }).click();
     await expect(modal).toBeHidden();
 
@@ -97,7 +97,7 @@ test.describe('cake-autorate config: shaper-rate ordering', () => {
     const modal = page.locator('#modal_overlay');
     await expect(modal).toBeVisible();
     await expect(modal).toContainText(
-      /Maximum upload rate \(4000\) must not be below the base rate \(5000\)/i);
+      /Maximum upload rate \(4000\) must not be below the base upload rate \(5000\)/i);
     await modal.getByRole('button', { name: 'Dismiss' }).click();
     await expect(modal).toBeHidden();
 
