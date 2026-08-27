@@ -6,8 +6,11 @@
  *
  * The single source of truth for the config form: the view builds one field per
  * entry by iterating OPTIONS, so the rendered fields cannot drift from this
- * list. Each entry is one of the 66 options upstream cake-autorate 3.2.2
- * implements (docs/upstream-option-inventory.md / docs/uci-option-schema.tsv).
+ * list. Each entry is one of the 66 options implemented by the upstream tag
+ * net/cake-autorate/Makefile pins (docs/upstream-option-inventory.md /
+ * docs/uci-option-schema.tsv). The tag is deliberately NOT restated here: this
+ * count is a claim about a release someone inspected, so it must not be
+ * rewritten by a bump that nobody re-inspected.
  * The package-local `enabled` procd gate is not here -- it is not an upstream
  * option and the view adds it separately.
  *

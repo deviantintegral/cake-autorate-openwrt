@@ -585,11 +585,12 @@ class Harness:
 
         # THE line that makes the package's own drop-in load. luci-app-statistics
         # replaces /etc/collectd.conf with a symlink to a config it generates
-        # from UCI, and the /etc/config/luci_statistics it ships in 25.12.5 has
-        # `option Include` COMMENTED OUT (checked in the published apk, not just
-        # the feed source). Without setting it, /etc/collectd/conf.d/
-        # cake-autorate.conf is never read and the graphs stay empty however
-        # long you wait -- which is a real gap for users too, not a VM quirk;
+        # from UCI, and the /etc/config/luci_statistics it ships across the
+        # 25.12 series has `option Include` COMMENTED OUT (checked in the
+        # published apk, not just the feed source). Without setting it,
+        # /etc/collectd/conf.d/cake-autorate.conf is never read and the graphs
+        # stay empty however long you wait -- which is a real gap for users
+        # too, not a VM quirk;
         # docs/configuration.md carries the same one-liner.
         #
         # Interval 10 (stock 30) and a 15min RRA are demo-box settings: this VM

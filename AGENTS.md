@@ -164,7 +164,7 @@ parsers):
   and the exec reader name the same metrics.
 - **luci-app-statistics does not load our collectd drop-in.** It replaces
   `/etc/collectd.conf` with a symlink to a config it generates from
-  `/etc/config/luci_statistics`, and the file it ships in 25.12.5 has
+  `/etc/config/luci_statistics`, and the file it ships in the 25.12 series has
   `option Include '/etc/collectd/conf.d'` **commented out**. Until a user sets
   it, `/etc/collectd/conf.d/cake-autorate.conf` is never read and the graphs
   stay empty however long collectd runs — the LuCI dependency buys the
@@ -206,11 +206,26 @@ parsers):
   the gate checks both).
   Neither fixes the interleaving — they stop it being fatal. Upstream fixed a
   sibling of the first in PR #392, merged to master but **in no release**
-  (v3.2.2 is still the newest tag); the SARS arm is unfixed even on master at
-  3.3.0-PRERELEASE. Drop each patch on the upstream bump that first ships a fix
-  for it — `tests/regression/test-fping-sample-gate.sh` and
+  (no tag ships it as of the pinned one); the SARS arm is unfixed even on
+  master at 3.3.0-PRERELEASE. Drop each patch on the upstream bump that first
+  ships a fix for it — `tests/regression/test-fping-sample-gate.sh` and
   `tests/regression/test-sars-record-gate.sh` both fail the moment `PKG_VERSION`
   moves, so a bump PR cannot land without that decision being made.
+
+- **The upstream version is restated outside the Makefile, and the restatements
+  split two ways.** The ones that state what we *ship* — the LuCI overview's
+  footer constant, the `cake-autorate` row in README.md, the Makefile line at
+  the top of this file — are rewritten by the `lynxthecat/cake-autorate` custom
+  manager in `renovate.json`, in the same PR that moves `PKG_VERSION`. The ones
+  that state what someone *verified against a tag* — `docs/upstream-option-inventory.md`,
+  the 66-option claim in `options.js`, the example path in `docs/uci-schema.md`,
+  the patch notes above — are deliberately left alone, because bumping a number
+  under an unverified claim turns a stale doc into a wrong one.
+  `tests/regression/test-upstream-version-pin.sh` enforces both halves and
+  fails on a version literal that belongs to neither. Add a restatement to a
+  covered file and it fails until you either give it a matchString or reword it
+  to not name a version — an unmanaged copy in the overview footer is what the
+  gate was written for.
 
 ## Running the tests + CI
 

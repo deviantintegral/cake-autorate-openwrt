@@ -26,6 +26,17 @@ the daemon actually consumes, and vice versa.*
 Both URL forms were downloaded independently and produced byte-identical
 tarballs with the same SHA-256, so the hash is safe to pin.
 
+**This document is a snapshot of one inspected release, not a mirror of the
+pin.** Renovate rewrites the version where the tree states what it *ships* --
+the Makefile, the LuCI footer, the README and AGENTS.md lines that name the tag
+-- but deliberately not here, because every number below (the tag commit, the
+tarball size, the SHA-256, the 66-row option table) is something a person
+checked against that tree. Rewriting them on a bump would replace a document
+that is visibly stale with one that is confidently wrong.
+`tests/regression/test-upstream-version-pin.sh` asserts the `Pinned tag` row
+above equals `PKG_VERSION`, so an upstream bump PR stays red until someone
+re-runs the extraction in the next section and refreshes this table with it.
+
 This is **not** the "Darkmoon" C rewrite. `v3.2.2` is the latest tag on the
 bash implementation (full tag list at time of pinning: `v1.0.0`, `v1.0.1`,
 `v1.1.0`, `v1.1.1`, `v1.2.0`, `v1.2.1`, `v3.0.0`, `v3.0.1`, `v3.1.0`, `v3.1.1`,
