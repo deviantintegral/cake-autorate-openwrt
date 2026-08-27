@@ -125,6 +125,51 @@ function humanize(name) {
 }
 
 /*
+ * SUBHEADINGS -- an option name that a heading is drawn immediately BEFORE.
+ *
+ * Essentials lists six rate fields whose titles differ only by the direction
+ * word buried in the middle of each: Minimum Download Shaper Rate, then five
+ * more of the same shape. Read at a glance they are one undifferentiated block
+ * of six, and the field you want is found by reading every title. Two headings
+ * split it into the two trios it always was, so the direction is established
+ * once, above the group, instead of once per row.
+ */
+var SUBHEADINGS = {
+	min_dl_shaper_rate_kbps: _('Download rates'),
+	min_ul_shaper_rate_kbps: _('Upload rates')
+};
+
+/*
+ * A full-width heading occupying one option row.
+ *
+ * form.DummyValue is the base because it already declines to touch UCI --
+ * write() and remove() are no-ops upstream -- so a heading can never reach the
+ * config bridge as a stray key. cfgvalue() is stubbed for the same reason: with
+ * no UCI option behind the name there is nothing to read either.
+ *
+ * The title is left EMPTY on purpose. form.js only builds the label column and
+ * the value column when a title is set, so an empty one gives the heading the
+ * whole row instead of indenting it into the value column like a field value.
+ */
+var SubHeading = form.DummyValue.extend({
+	__name__: 'CBI.CakeSubHeading',
+
+	cfgvalue: function () { return null; },
+
+	/*
+	 * Nothing to parse, and saying so matters. The inherited parse() treats a
+	 * rendered row with no widget value as an EMPTY REQUIRED field and rejects
+	 * the whole Save & Apply with 'Option "..." must not be empty' -- a heading
+	 * has no value by construction, so it would block every save on the page.
+	 */
+	parse: function () { return Promise.resolve(); },
+
+	renderWidget: function () {
+		return E('h4', { 'class': 'cake-subhead' }, this.subhead);
+	}
+});
+
+/*
  * The visible help for one option: prose plus its unit/range hint.
  *
  * Deliberately does not print the UCI key. No LuCI app in the feed does, not
@@ -185,6 +230,14 @@ function applyFilter(mapEl, statusEl, query) {
 
 	mapEl.classList.add('cake-filtering');
 	rows.forEach(function (r) {
+		/* A heading groups the rows that follow it. Filtering flattens every
+		 * tab into one list and drops most of those rows, so a heading has
+		 * nothing left to head -- hide them all rather than caption a result
+		 * set they no longer describe. */
+		if (r.querySelector('.cake-subhead')) {
+			r.style.display = 'none';
+			return;
+		}
 		var name = r.getAttribute('data-name') || '';
 		var titleEl = r.querySelector('.cbi-value-title');
 		var title = titleEl ? titleEl.textContent : '';
@@ -348,6 +401,13 @@ return view.extend({
 			var title = humanize(opt.name);
 			var descr = describe(opt);
 
+			/* taboption() renders in call order, so adding the heading here --
+			 * before this option's own field -- is what places it. */
+			if (SUBHEADINGS[opt.name]) {
+				var h = s.taboption(opt.group, SubHeading, '_subhead_' + opt.name, '');
+				h.subhead = SUBHEADINGS[opt.name];
+			}
+
 			/* The two interface fields become comboboxes offering the SQM-derived
 			 * devices. Free text is still accepted, so a value set before SQM
 			 * existed keeps showing; a value SQM does not back raises a warning
@@ -456,7 +516,13 @@ return view.extend({
 				'#cake-autorate-filter{flex:1 1 20em;max-width:32em;}' +
 				'#cake-autorate-filter-status{opacity:.75;font-size:90%;}' +
 				'.cake-if-warn{margin-top:.4em;padding:.4em .6em;font-size:90%;}' +
-				'.cake-if-warn.cake-if-ok{color:#2e7d32;padding:.2em 0;}'));
+				'.cake-if-warn.cake-if-ok{color:#2e7d32;padding:.2em 0;}' +
+				/* flex-basis 100%: a .cbi-value row is a flex container in the
+				 * stock themes, and without it the heading shares the line with
+				 * the (empty) label column instead of spanning the row. */
+				'.cake-subhead{flex:1 1 100%;width:100%;display:block;' +
+				'margin:1.2em 0 .2em;padding-bottom:.2em;font-size:1.05em;' +
+				'border-bottom:1px solid rgba(128,128,128,.35);}'));
 
 			nodes.push(E('p', {}, [
 				E('strong', {}, 'cake-autorate ' + PKG_VERSION), ' · ',
