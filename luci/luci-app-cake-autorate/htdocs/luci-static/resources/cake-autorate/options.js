@@ -155,7 +155,7 @@ var OPTIONS = [
 	{ name: 'output_processing_stats', group: 'logging', type: 'bool',
 	  desc: 'Emit the per-ping DATA monitoring lines (full processing detail; heavy).', units: '0 or 1' },
 	{ name: 'output_load_stats', group: 'logging', type: 'bool',
-	  desc: 'Emit LOAD lines showing achieved dl/ul rates on every rate sample.', units: '0 or 1' },
+	  desc: 'Emit LOAD lines showing the achieved download and upload rates on every rate sample.', units: '0 or 1' },
 	{ name: 'output_reflector_stats', group: 'logging', type: 'bool',
 	  desc: 'Emit REFLECTOR lines with per-reflector baseline/EWMA comparison data.', units: '0 or 1' },
 	{ name: 'output_summary_stats', group: 'logging', type: 'bool', managed: true,

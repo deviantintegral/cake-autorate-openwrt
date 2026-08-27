@@ -68,26 +68,26 @@ return baseclass.extend({
 				options: {
 					bitrate_dl_shaper: {
 						color: "0000ff",
-						title: "Shaper   (DL)",
+						title: "Shaper   (download)",
 						noarea: true,
 						overlay: true
 					},
 					bitrate_dl_achieved: {
 						color: "00b0ff",
-						title: "Achieved (DL)",
+						title: "Achieved (download)",
 						noarea: false,
 						overlay: true
 					},
 					bitrate_ul_shaper: {
 						color: "ff0000",
-						title: "Shaper   (UL)",
+						title: "Shaper   (upload)",
 						flip: true,
 						noarea: true,
 						overlay: true
 					},
 					bitrate_ul_achieved: {
 						color: "ff8000",
-						title: "Achieved (UL)",
+						title: "Achieved (upload)",
 						flip: true,
 						noarea: false,
 						overlay: true
@@ -114,12 +114,12 @@ return baseclass.extend({
 				options: {
 					gauge_dl_owd_delta_us: {
 						color: "00b000",
-						title: "OWD delta (DL)",
+						title: "OWD delta (download)",
 						overlay: true
 					},
 					gauge_ul_owd_delta_us: {
 						color: "b000b0",
-						title: "OWD delta (UL)",
+						title: "OWD delta (upload)",
 						flip: true,
 						overlay: true
 					}
@@ -147,13 +147,13 @@ return baseclass.extend({
 				options: {
 					gauge_dl_load: {
 						color: "00b000",
-						title: "Load state (DL)",
+						title: "Load state (download)",
 						noarea: true,
 						overlay: true
 					},
 					gauge_ul_load: {
 						color: "b000b0",
-						title: "Load state (UL)",
+						title: "Load state (upload)",
 						noarea: true,
 						overlay: true
 					}

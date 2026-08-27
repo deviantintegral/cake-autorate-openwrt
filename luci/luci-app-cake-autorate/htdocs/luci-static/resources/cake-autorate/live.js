@@ -36,10 +36,10 @@ var NUM_FIELDS = [
 var STR_FIELDS = ['dl_load_condition', 'ul_load_condition', 'datetime', 'reason'];
 
 /*
- * STATUS_FIELDS -- the DL/UL metric rows the status table renders, in order.
- * Each entry drives two value cells (download + upload). The view marks both
- * data-live="1" and sets data-field to the dl/ul key, which is what the visual
- * suite masks and the functional suite asserts on.
+ * STATUS_FIELDS -- the metric rows the status table renders, in order. Each
+ * entry drives two value cells, one per direction. The view marks both
+ * data-live="1" and sets data-field to the download or upload key, which is
+ * what the visual suite masks and the functional suite asserts on.
  */
 var STATUS_FIELDS = [
 	{ label: 'CAKE shaper rate', unit: 'Kbit/s', dl: 'cake_dl_rate_kbps', ul: 'cake_ul_rate_kbps' },

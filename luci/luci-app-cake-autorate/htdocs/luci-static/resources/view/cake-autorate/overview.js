@@ -66,8 +66,15 @@ var TABS = [
 	  descr: _('Which log streams the daemon emits. Options marked package-managed are overridden by the service so the status view and collectd always have data.') }
 ];
 
+/*
+ * How one underscore-separated word of a UCI option name is rendered in the
+ * field title. `dl`/`ul` expand rather than shouting the upstream abbreviation
+ * at the reader: nothing else in this UI says DL, the status table's own
+ * columns are headed Download and Upload, and the pair is easy to misread at a
+ * glance in a form where the two differ by one letter.
+ */
 var ACRONYMS = {
-	dl: 'DL', ul: 'UL', owd: 'OWD', ewma: 'EWMA', kbps: 'Kbit/s',
+	dl: 'Download', ul: 'Upload', owd: 'OWD', ewma: 'EWMA', kbps: 'Kbit/s',
 	ms: 'ms', kb: 'KB', thr: 'threshold', avg: 'avg', mins: 'min',
 	'if': 'interface', args: 'args'
 };

@@ -113,7 +113,7 @@ function runBadge(row) {
 		{ 'class': runBadgeClass(row) });
 }
 
-/* The metric grid for one instance (DL/UL columns). */
+/* The metric grid for one instance (download/upload columns). */
 function metricTable(row) {
 	var rows = [
 		E('tr', {}, [
