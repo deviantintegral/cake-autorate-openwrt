@@ -20,8 +20,9 @@
  * file is config editing plus the SQM-validated dl_if / ul_if pickers: both are
  * comboboxes filled from the `sqm_interfaces` rpcd method, and both show a
  * warning (never a block) when the chosen interface has no live SQM CAKE qdisc
- * behind it. The version shown is the PACKAGE version 3.2.2, not the 3.2.1 the
- * daemon reports for itself -- upstream forgot to bump that at tag v3.2.2.
+ * behind it. The version in the footer is the PACKAGE version -- the upstream
+ * tag net/cake-autorate/Makefile pins -- and NOT the version the daemon reports
+ * for itself, which upstream forgot to bump and which therefore trails it.
  *
  * Selectors the Playwright suites rely on:
  *   - each option row:      div.cbi-value[data-name="<uci_option>"]
@@ -33,7 +34,24 @@
  *                            detection|idle|logging"]
  */
 
-var PKG_VERSION = '3.2.2';
+/*
+ * The upstream tag this feed builds, restated for the footer.
+ *
+ * RENOVATE OWNS THIS LINE. The `lynxthecat/cake-autorate` custom manager in
+ * renovate.json rewrites it in the same PR that moves PKG_VERSION in
+ * net/cake-autorate/Makefile, and tests/regression/test-upstream-version-pin.sh
+ * fails if the two ever disagree. It was NOT covered by that manager until the
+ * manager was widened, so the next automatic bump would have left this page
+ * naming a version the feed does not build.
+ *
+ * Do not hand-edit it, and do not restate the version anywhere else in this
+ * file -- a second literal is a second thing to get wrong, and only this one is
+ * rewritten. The pin test fails on a stray copy for that reason.
+ *
+ * Named UPSTREAM_VERSION, not PKG_VERSION: this package has a PKG_VERSION of
+ * its own (luci-app-cake-autorate follows the repo tag) and it is not this one.
+ */
+var UPSTREAM_VERSION = '3.2.2';
 var DOC_URL = 'https://github.com/lynxthecat/cake-autorate/wiki';
 
 /* Derives the shaping interfaces from the live SQM config, so dl_if / ul_if can
@@ -408,7 +426,7 @@ return view.extend({
 				'.cake-if-warn.cake-if-ok{color:#2e7d32;padding:.2em 0;}'));
 
 			nodes.push(E('p', {}, [
-				E('strong', {}, 'cake-autorate ' + PKG_VERSION), ' · ',
+				E('strong', {}, 'cake-autorate ' + UPSTREAM_VERSION), ' · ',
 				E('a', { 'href': DOC_URL, 'target': '_blank', 'rel': 'noreferrer' }, _('Upstream documentation'))
 			]));
 

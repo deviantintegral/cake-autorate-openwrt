@@ -18,7 +18,7 @@ Run the gate (no router or `uci` binary needed):
 ```sh
 tests/schema/test-uci-schema.sh
 # optionally also diff the metadata against the real upstream file:
-tests/schema/test-uci-schema.sh --upstream /path/to/cake-autorate-3.2.2/defaults.sh
+tests/schema/test-uci-schema.sh --upstream /path/to/cake-autorate-<PKG_VERSION>/defaults.sh
 ```
 
 ---
