@@ -245,4 +245,34 @@ test('instanceNameSuggestions: no SQM means no suggestions, not a bad list', fun
 	assert.deepStrictEqual(mod.instanceNameSuggestions(['---'], []), []);
 });
 
+/* --- describe() renders through innerHTML ---------------------------------
+ *
+ * overview.js describe() returns `desc + ' (<code>' + name + '</code>)'`, and
+ * LuCI puts that string on the page with innerHTML (luci.js dom.append assigns
+ * a bare string child that way; form.js renders the description only when it IS
+ * a string, so a DOM node cannot be used instead). That makes escaping the
+ * caller's problem, and these two assertions are the reason it needs no
+ * escaping: nothing in the metadata carries a character innerHTML would read as
+ * markup.
+ *
+ * If a future option name or description ever needs an angle bracket or an
+ * ampersand -- "delta > threshold" is the plausible one -- this test fails
+ * FIRST, and the fix is to escape in describe(), not to relax the test. */
+
+test('option names are safe to interpolate into markup', function () {
+	mod.OPTIONS.forEach(function (o) {
+		/* Upstream's own casing is kept verbatim (log_DEBUG_messages_to_syslog),
+		 * so this asserts the character SET, not a casing convention. */
+		assert.ok(/^[A-Za-z0-9_]+$/.test(o.name),
+			o.name + ' must be letters/digits/underscore only');
+	});
+});
+
+test('descriptions carry no characters innerHTML would read as markup', function () {
+	mod.OPTIONS.forEach(function (o) {
+		assert.ok(!/[<>&]/.test(o.desc),
+			o.name + ' description must not contain <, > or &');
+	});
+});
+
 console.log('\n' + passed + ' tests passed');

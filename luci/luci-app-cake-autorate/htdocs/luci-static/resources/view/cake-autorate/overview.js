@@ -111,7 +111,36 @@ var UNITS = {
 	kb: 'kilobytes', b: 'bytes'
 };
 
+/*
+ * Titles humanize() must not be allowed to derive from the key.
+ *
+ * humanize() splits on "_" and cannot know that up|load and down|load are a
+ * boundary between two ideas rather than a split word, so
+ * shaper_rate_adjust_up_load_high came out as "Shaper Rate Adjust Up Load
+ * High" -- which reads as UPLOAD, the one thing it does not mean.
+ *
+ * "Up"/"down" is the direction of the rate MULTIPLIER; "load high"/"load low"
+ * is the traffic-load condition that triggers it. Upstream defaults.sh says so
+ * in its own comments -- 1.04 is "how rapidly to increase shaper rate upon high
+ * load detected", 0.99 and 1.01 are "how rapidly to return down/up to base
+ * shaper rate upon idle or low load detected" -- and the defaults confirm it:
+ * the "up" keys are >= 1 and the "down" key is <= 1. Traffic direction is
+ * dl/ul everywhere in this config (adjust_dl_shaper_rate, min_ul_shaper_rate_
+ * kbps) and never up/down, so there is no reading where these three name one.
+ *
+ * These are the only three keys where the generic path lands on a wrong word,
+ * so this stays a short exception list rather than a second naming scheme.
+ */
+var TITLE_OVERRIDES = {
+	shaper_rate_adjust_up_load_high: _('Rate Increase While Load Is High'),
+	shaper_rate_adjust_down_load_low: _('Decay Toward Base From Above (low load)'),
+	shaper_rate_adjust_up_load_low: _('Decay Toward Base From Below (low load)')
+};
+
 function humanize(name) {
+	if (TITLE_OVERRIDES[name])
+		return TITLE_OVERRIDES[name];
+
 	var words = name.split('_');
 	var unit = (words.length > 1) ? UNITS[words[words.length - 1].toLowerCase()] : null;
 	if (unit)
@@ -170,22 +199,40 @@ var SubHeading = form.DummyValue.extend({
 });
 
 /*
- * The visible help for one option.
+ * The visible help for one option: the sentence, then the UCI key it writes.
  *
- * It is opt.desc verbatim: whole sentences that carry their own units and
- * constraints. It used to be desc plus a separate hint glued on after an em
- * dash -- "Rotate the log file once this many KB of log lines have
+ * The sentence is opt.desc verbatim -- whole sentences that carry their own
+ * units and constraints. It used to be desc plus a separate hint glued on after
+ * an em dash -- "Rotate the log file once this many KB of log lines have
  * accumulated.  —  KB, > 0" -- which said the unit twice, in two registers,
  * and made the sentence the shorter half of its own help text.
  *
- * Deliberately does not print the UCI key. No LuCI app in the feed does, not
- * even luci-app-sqm -- the closest comparison, which also wraps a documented
- * shaper and still writes "Latency target (ingress)" rather than `itarget`.
- * Repeating the key on all 66 rows is noise, and it stays reachable anyway: the
- * search box matches UCI names, and every row carries data-name in the DOM.
+ * WHY THE KEY IS PRINTED AFTER ALL
+ *   This used to end at the sentence, on the grounds that no LuCI app in the
+ *   feed prints UCI keys (luci-app-sqm writes "Latency target (ingress)", not
+ *   `itarget`), that 66 repeats are noise, and that the key stays reachable via
+ *   the search box and each row's data-name.
+ *
+ *   That reasoning answers "how do I find this FIELD", which the search box
+ *   does solve. It does not answer "what does upstream say about this option",
+ *   which is the question the key actually gets asked for: upstream documents
+ *   every option by its key in defaults.sh, this form paraphrases them into
+ *   prose, and TITLE_OVERRIDES above now deliberately breaks the last
+ *   mechanical link between title and key. Without the key on the row there is
+ *   nothing to carry across to upstream's file, a `grep`, or a forum thread --
+ *   and data-name is only reachable by opening devtools.
+ *
+ * WHY IT IS MARKUP AND NOT A NODE
+ *   form.js renders the description ONLY when typeof description === 'string'
+ *   (a Node or an array is silently dropped and the help vanishes), and
+ *   luci.js dom.append assigns a bare string child through innerHTML. So <code>
+ *   here is rendered as an element, and escaping is this function's problem.
+ *   Every name is a hardcoded literal in options.js -- never user input, never
+ *   a UCI value -- and no desc string contains <, > or &, so there is nothing
+ *   to escape. Both halves of that are asserted by the unit test.
  */
 function describe(opt) {
-	return opt.desc;
+	return opt.desc + ' (<code>' + opt.name + '</code>)';
 }
 
 /*
@@ -397,7 +444,8 @@ return view.extend({
 		/* The procd gate. Not one of the 66 upstream options and never written
 		 * into the daemon config; leads the Essentials tab. */
 		var en = s.taboption('essentials', form.Flag, 'enabled', _('Enabled'),
-			_('Master switch for this instance. Turn on once the interfaces and rates are correct for your line.'));
+			_('Master switch for this instance. Turn on once the interfaces and rates are correct for your line.') +
+			' (<code>enabled</code>)');
 		en.rmempty = false;
 
 		/* dl_if / ul_if options, captured so the post-render pass can seed their
@@ -528,6 +576,12 @@ return view.extend({
 				'#cake-autorate-toolbar{display:flex;flex-wrap:wrap;gap:.5em;align-items:center;margin:.5em 0;}' +
 				'#cake-autorate-filter{flex:1 1 20em;max-width:32em;}' +
 				'#cake-autorate-filter-status{opacity:.75;font-size:90%;}' +
+				/* The UCI key describe() appends. The stock themes leave <code>
+				 * inside a description at body size and body colour, where it
+				 * competes with the sentence it is annotating; this makes it read
+				 * as a key -- monospace, slightly smaller, slightly muted --
+				 * without inventing a colour the theme does not have. */
+				'.cbi-value-description code{font-family:monospace;font-size:92%;opacity:.8;}' +
 				'.cake-if-warn{margin-top:.4em;padding:.4em .6em;font-size:90%;}' +
 				'.cake-if-warn.cake-if-ok{color:#2e7d32;padding:.2em 0;}' +
 				/* flex-basis 100%: a .cbi-value row is a flex container in the
