@@ -19,9 +19,14 @@
  *           (pinger_binary=ListValue), list=DynamicList.
  * lo/hi  -> optional numeric bounds turned into a LuCI datatype by the view.
  * doc    -> optional upstream doc link for a concept needing more than a sentence.
+ *
+ * DOC points at the upstream REPOSITORY, not its wiki: github.com/lynxthecat/
+ * cake-autorate/wiki carries no pages and 302-redirects to the repo root, so a
+ * wiki link was a dead link dressed up as a destination. The README there is
+ * where the concepts below are actually written up.
  */
 
-var DOC = 'https://github.com/lynxthecat/cake-autorate/wiki';
+var DOC = 'https://github.com/lynxthecat/cake-autorate';
 
 var OPTIONS = [
 	/* ---- essentials (8) ------------------------------------------------ */

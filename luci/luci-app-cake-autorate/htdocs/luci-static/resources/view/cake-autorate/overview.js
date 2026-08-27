@@ -34,7 +34,12 @@
  */
 
 var PKG_VERSION = '3.2.2';
-var DOC_URL = 'https://github.com/lynxthecat/cake-autorate/wiki';
+/* The upstream REPOSITORY, not its wiki -- the wiki has no pages and
+ * 302-redirects here anyway, so linking it just sent readers through a bounce.
+ * Named for what it points at, since "upstream" tells a reader nothing about
+ * where they are about to land. */
+var DOC_URL = 'https://github.com/lynxthecat/cake-autorate';
+var DOC_TITLE = _('lynxthecat/cake-autorate documentation');
 
 /* Derives the shaping interfaces from the live SQM config, so dl_if / ul_if can
  * offer checked choices instead of free text. */
@@ -111,7 +116,7 @@ function tabDescr(tab) {
 		return tab.descr;
 	return E('span', {}, [
 		tab.descr, ' ',
-		E('a', { 'href': DOC_URL, 'target': '_blank', 'rel': 'noreferrer' }, _('Upstream documentation →'))
+		E('a', { 'href': DOC_URL, 'target': '_blank', 'rel': 'noreferrer' }, DOC_TITLE + ' →')
 	]);
 }
 
@@ -396,7 +401,7 @@ return view.extend({
 
 			nodes.push(E('p', {}, [
 				E('strong', {}, 'cake-autorate ' + PKG_VERSION), ' · ',
-				E('a', { 'href': DOC_URL, 'target': '_blank', 'rel': 'noreferrer' }, _('Upstream documentation'))
+				E('a', { 'href': DOC_URL, 'target': '_blank', 'rel': 'noreferrer' }, DOC_TITLE)
 			]));
 
 			/* Say what the interface fields are checked against, so a missing SQM
