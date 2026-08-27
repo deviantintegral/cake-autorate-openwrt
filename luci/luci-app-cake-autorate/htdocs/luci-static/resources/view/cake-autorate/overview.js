@@ -34,12 +34,36 @@
  */
 
 var PKG_VERSION = '3.2.2';
-/* The upstream REPOSITORY, not its wiki -- the wiki has no pages and
- * 302-redirects here anyway, so linking it just sent readers through a bounce.
- * Named for what it points at, since "upstream" tells a reader nothing about
- * where they are about to land. */
-var DOC_URL = 'https://github.com/lynxthecat/cake-autorate';
-var DOC_TITLE = _('lynxthecat/cake-autorate documentation');
+
+/*
+ * Upstream's per-option reference, which is defaults.sh and not the README.
+ *
+ * The README documents the PROJECT -- theory of operation, installation -- and
+ * names individual options only in passing prose, under no heading of their
+ * own. There is no anchor to link an option to, so a per-option deep link into
+ * it is not a thing that exists. defaults.sh is where every option is actually
+ * written down, one per line, each with its own comment.
+ *
+ * That makes this a deep link in practice without being one in the URL: each
+ * row of the form now prints its UCI key (see describe()), and the key is what
+ * the reader searches for once they land here. Doing it as 66 real
+ * "blob/<tag>/defaults.sh#L<n>" links was the alternative and was rejected --
+ * that is 66 line numbers to re-check by hand on every upstream bump, silently
+ * wrong the moment upstream inserts a line, to save one Ctrl-F.
+ *
+ * Pinned to the tag we actually ship rather than to a branch, so the file a
+ * reader lands on is the one their daemon was built from: upstream keeps
+ * adding and renaming options, and HEAD would document some this package does
+ * not have. It is built from PKG_VERSION for that reason -- one version string
+ * on this page, not two that can disagree.
+ *
+ * (Note that PKG_VERSION here is its own literal and is NOT what Renovate
+ * rewrites -- that is net/cake-autorate/Makefile. Keeping them in step is
+ * handled separately; this link just makes sure it only has to be fixed once.)
+ */
+var DOC_URL = 'https://github.com/lynxthecat/cake-autorate/blob/v' +
+	PKG_VERSION + '/defaults.sh';
+var DOC_TITLE = _('Upstream option reference (defaults.sh)');
 
 /* Derives the shaping interfaces from the live SQM config, so dl_if / ul_if can
  * offer checked choices instead of free text. */
