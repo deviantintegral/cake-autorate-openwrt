@@ -253,10 +253,23 @@ var SubHeading = form.DummyValue.extend({
  *   here is rendered as an element, and escaping is this function's problem.
  *   Every name is a hardcoded literal in options.js -- never user input, never
  *   a UCI value -- and no desc string contains <, > or &, so there is nothing
- *   to escape. Both halves of that are asserted by the unit test.
+ *   to escape. opt.doc is interpolated into an href on the same terms, and is
+ *   likewise a literal. All three are asserted by the unit test.
  */
 function describe(opt) {
-	return opt.desc + ' (<code>' + opt.name + '</code>)';
+	var help = opt.desc + ' (<code>' + opt.name + '</code>)';
+
+	/* The eight algorithm options carry opt.doc (see options.js DOC). Separator
+	 * is the middot this page already uses between the version and the header
+	 * link, NOT an em dash: an earlier pass took em-dash tails out of this help
+	 * text because what followed them restated the sentence in a worse register.
+	 * A link is not that -- it is somewhere else to go, and it only appears on
+	 * the rows where a sentence provably is not enough. */
+	if (opt.doc)
+		help += ' \u00b7 <a href="' + opt.doc + '" target="_blank"' +
+			' rel="noreferrer">' + _('Theory of Operation') + '</a>';
+
+	return help;
 }
 
 /*

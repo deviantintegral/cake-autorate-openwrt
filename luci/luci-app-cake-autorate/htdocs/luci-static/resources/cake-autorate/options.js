@@ -23,7 +23,13 @@
  *           second, worse register of the same explanation, and a checkbox
  *           needs no hint at all.
  * lo/hi  -> optional numeric bounds turned into a LuCI datatype by the view.
- * doc    -> optional upstream doc link for a concept needing more than a sentence.
+ * doc    -> optional upstream link for a concept needing more than a sentence.
+ *           Carried by the eight options whose VALUE cannot be chosen from the
+ *           sentence alone -- the EWMA alphas, the OWD delta thresholds, the
+ *           bufferbloat response multipliers and the reflector pool. Those are
+ *           the control algorithm's own parameters: knowing that alpha is
+ *           "between 0 and 1" does not tell you what to put there, and no
+ *           length of help text substitutes for the model it feeds.
  * def    -> bool options only: the packaged UCI default (uci_default in
  *           docs/uci-option-schema.tsv), so a newly added instance starts with
  *           the same checkbox states /etc/config/cake-autorate ships. Every
@@ -31,13 +37,24 @@
  *           text field needs no equivalent because "empty" is a state the user
  *           can actually see, while an unchecked box is not.
  *
- * DOC points at the upstream REPOSITORY, not its wiki: github.com/lynxthecat/
- * cake-autorate/wiki carries no pages and 302-redirects to the repo root, so a
- * wiki link was a dead link dressed up as a destination. The README there is
- * where the concepts below are actually written up.
+ * DOC points at the upstream README's "Theory of Operation", not the repo root
+ * and not its wiki. The wiki carries no pages and 302-redirects to the root, so
+ * linking it was a dead end dressed up as a destination; the root is where the
+ * view's own header link goes, so repeating it on eight rows would just be the
+ * same link twice. Theory of Operation is the section that actually explains
+ * the loop these eight values tune -- load, reflectors, baselines, and what
+ * happens when bufferbloat is seen.
+ *
+ * NOT pinned to a release tag, deliberately, and unlike the view's DOC_URL
+ * (which is pinned because an option list changes from version to version).
+ * This is conceptual prose about the algorithm, it is not versioned in any
+ * meaningful way, and pinning it would put a THIRD copy of the version string
+ * in the tree to keep in step with the Makefile. A stale anchor would land the
+ * reader at the top of the README; a stale version would land them on the
+ * wrong document entirely.
  */
 
-var DOC = 'https://github.com/lynxthecat/cake-autorate';
+var DOC = 'https://github.com/lynxthecat/cake-autorate#theory-of-operation';
 
 var OPTIONS = [
 	/* ---- essentials (8) ------------------------------------------------ */
