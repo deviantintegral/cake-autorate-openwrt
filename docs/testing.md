@@ -251,6 +251,20 @@ npx playwright test --project=visual --update-snapshots
 
 Review the resulting PNG changes before committing them.
 
+**`--update-snapshots` does not refresh every stale baseline.** Bare, it means
+`--update-snapshots=changed`, and "changed" is judged by the same
+`maxDiffPixelRatio` (0.002) the assertions use. A real UI change too small to
+trip that tolerance leaves the committed baseline **stale while the run reports
+success** — adding a short link to the end of an existing line does it, if
+nothing reflows. The mismatch then sits in the tree until some later, larger
+change on the same page happens to rewrite it.
+
+If a change should have moved a baseline and did not, do not assume it was not
+rendered. Delete that one PNG and re-run: a *missing* snapshot is always
+written. `--update-snapshots=all` rewrites everything unconditionally, which
+also works, but it re-encodes the untouched baselines too and commits a page of
+anti-aliasing noise with them.
+
 ### The review gallery
 
 After a capture, build a browsable, labelled gallery of every page/state:
