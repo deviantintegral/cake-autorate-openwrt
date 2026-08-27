@@ -236,6 +236,31 @@ cd tests/ui
 npx playwright test --project=docs      # writes docs/images/*.png
 ```
 
+One image needs more than that. `statistics-graphs.png` shows the collectd
+dashboard, and while `luci-app-statistics` is always installed (the LuCI app
+depends on it), a serve VM has no `cake_autorate` RRDs behind it: collectd is
+not told to read the package's drop-in, and a VM minutes old has nothing to
+graph anyway. Turn that path on for the docs run:
+
+```sh
+cd tests/ui
+CA_UI_STATISTICS=1 npx playwright test --project=docs
+```
+
+That makes serve mode set the `Include /etc/collectd/conf.d` that
+luci-app-statistics' generated config omits (see
+[`configuration.md`](configuration.md#statistics-caveat-collectd-must-be-told-to-read-the-drop-in)), put real load on the
+primary WAN so the shaper moves, and collect for `CA_UI_STATS_WARMUP_S` seconds
+(default 600) **before** reporting the VM ready — so the run opens on a
+dashboard with data in it rather than racing collectd's first sample. Budget
+about ten minutes more wall-clock. Without the variable that one test **skips**,
+naming the variable in the skip reason; the other five images still regenerate.
+
+It also shortens collectd's interval and adds a 15-minute RRA, so a VM that is
+minutes old draws a readable graph instead of a sliver against an empty
+two-hour axis. Those are demo-box settings — the timespan dropdown in that
+screenshot therefore offers a `15min` span a stock install does not.
+
 It is a generator, not a test: it asserts nothing and compares against no
 baseline. **CI never runs it** (the workflow names `--project=functional` and
 `--project=visual` explicitly), so it cannot gate a build or rewrite committed
