@@ -15,7 +15,7 @@ bandwidth up and down to keep latency low without giving away throughput.
 | --- | --- |
 | `cake-autorate` | The upstream **bash** daemon (pinned to tag **v3.2.2**) plus the OpenWrt glue: `/etc/config/cake-autorate` UCI, a procd init script (one supervised daemon per enabled instance), the UCI→native config bridge, an rpcd backend, and a collectd `exec` statistics source. |
 | `luci-app-cake-autorate` | The LuCI UI: an Essentials-first configuration form with SQM-validated interface pickers, plus a live status view. Depends on `cake-autorate` + `luci-base`. |
-| Statistics graphs | Shipped inside `luci-app-cake-autorate`: a collectd RRD definition (`cake_autorate.js`) that renders the daemon's achieved/shaper rates, OWD deltas and load state under **Statistics → Graphs**, one panel per instance. |
+| Statistics graphs | Shipped inside `luci-app-cake-autorate`: a collectd RRD definition (`cake_autorate.js`) that renders the daemon's achieved/shaper rates, OWD deltas and load state under **Statistics → Graphs**, as one set of three panels per instance. |
 
 Both packages are **noarch** (`PKG_ARCH:=all` / pure shell + JS payload), so a
 single build serves every target.
@@ -26,12 +26,15 @@ single build serves every target.
 
 ## What it looks like
 
-**Network → CAKE Autorate → Configuration.** A fresh instance needs only its two
-interfaces and the min/base/max rates; the interface pickers are populated from
-the live SQM config and confirm what they are backed by:
+**Network → CAKE Autorate → Configuration.** The Essentials tab is the
+configuration an instance cannot run without: its two interfaces, then a
+download and an upload rate trio under their own headings. The interface pickers
+are populated from the live SQM config and confirm what they are backed by:
 
-![The Essentials tab of the LuCI configuration form, showing the DL/UL interface
-pickers with their SQM validation hints and the six shaper-rate fields](docs/images/config-essentials.png)
+![The Essentials tab of the LuCI configuration form, showing the download and
+upload interface pickers with their SQM validation hints, and the six
+shaper-rate fields under their Download rates and Upload rates
+headings](docs/images/config-essentials.png)
 
 **Network → CAKE Autorate → Status.** A live per-instance readout, refreshed
 every 3 seconds from the running daemon, with start/stop/restart controls per
@@ -45,6 +48,16 @@ The daemon only samples while there is traffic: with `enable_sleep_function`
 idle link and stops reporting until traffic returns. The table then holds the
 last sample it did report, and **Last update** says how long ago that was —
 `16:25:36 (4m 12s ago)`. That is normal on an idle line, not a stalled service.
+
+**Statistics → Graphs → CAKE Autorate.** One panel set per instance, graphing
+the shaper rate against the achieved rate, the one-way-delay delta driving the
+controller, and the load/bufferbloat state. Installing the package is enough to
+put the tab there; one collectd setting is what starts filling it (see the
+[statistics caveat](docs/configuration.md#statistics-caveat-collectd-must-be-told-to-read-the-drop-in)):
+
+![The luci-app-statistics graph page on the CAKE Autorate tab, showing the
+shaper and achieved rates for download and upload, the one-way-delay delta and
+the load state, one set of panels per instance](docs/images/statistics-graphs.png)
 
 More screenshots — the grouped advanced tabs, the option search and a two-WAN
 setup — are in the [configuration reference](docs/configuration.md). All of them

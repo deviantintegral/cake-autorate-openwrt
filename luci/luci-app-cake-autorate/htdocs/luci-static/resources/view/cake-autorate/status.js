@@ -155,9 +155,10 @@ function runBadge(row) {
 		{ 'class': cellClass(row, 'running') });
 }
 
-/* One DL or UL value cell. data-title carries the column name so the theme's
- * narrow-screen rules -- which hide the header row entirely -- can re-label the
- * value in place (luci-theme-bootstrap mobile.css: .td[data-title]::before). */
+/* One download or upload value cell. data-title carries the column name so the
+ * theme's narrow-screen rules -- which hide the header row entirely -- can
+ * re-label the value in place (luci-theme-bootstrap mobile.css:
+ * .td[data-title]::before). */
 function valueCell(row, field, title) {
 	var cls = cellClass(row, field);
 	return E('td', { 'class': 'td cake-col-value', 'data-title': title },
@@ -166,7 +167,7 @@ function valueCell(row, field, title) {
 }
 
 /*
- * The metric grid for one instance (DL/UL columns).
+ * The metric grid for one instance (download/upload columns).
  *
  * The .table/.tr/.th/.td class set is what LuCI themes actually style -- a bare
  * <table class="table"> picks up almost none of it -- and tr.table-titles is the

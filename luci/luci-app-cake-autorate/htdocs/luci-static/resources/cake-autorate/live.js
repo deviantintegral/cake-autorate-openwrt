@@ -36,16 +36,16 @@ var NUM_FIELDS = [
 var STR_FIELDS = ['dl_load_condition', 'ul_load_condition', 'datetime', 'reason'];
 
 /*
- * STATUS_FIELDS -- the DL/UL metric rows the status table renders, in order.
- * Each entry drives two value cells (download + upload). The view marks both
- * data-live="1" and sets data-field to the dl/ul key, which is what the visual
- * suite masks and the functional suite asserts on.
+ * STATUS_FIELDS -- the metric rows the status table renders, in order. Each
+ * entry drives two value cells, one per direction. The view marks both
+ * data-live="1" and sets data-field to the download or upload key, which is
+ * what the visual suite masks and the functional suite asserts on.
  */
 var STATUS_FIELDS = [
 	{ label: 'CAKE shaper rate', unit: 'Kbit/s', dl: 'cake_dl_rate_kbps', ul: 'cake_ul_rate_kbps' },
 	{ label: 'Achieved rate', unit: 'Kbit/s', dl: 'dl_achieved_kbps', ul: 'ul_achieved_kbps' },
 	{ label: 'Load condition', unit: '', dl: 'dl_load_condition', ul: 'ul_load_condition' },
-	{ label: 'Avg OWD delta', unit: 'µs', dl: 'dl_avg_owd_delta_us', ul: 'ul_avg_owd_delta_us' },
+	{ label: 'Average OWD delta', unit: 'µs', dl: 'dl_avg_owd_delta_us', ul: 'ul_avg_owd_delta_us' },
 	{ label: 'Sum delays', unit: '', dl: 'dl_sum_delays', ul: 'ul_sum_delays' }
 ];
 

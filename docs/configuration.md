@@ -24,13 +24,16 @@ second section for a second WAN (see **Multi-instance**, below).
 
 ## Essentials first
 
-A fresh instance needs only its two interfaces and the min/base/max shaper rates
-for each direction — **everything else has a working default**. In LuCI these
-live on the **Essentials** tab; in UCI they are the first block of the section:
+Every instance needs its two interfaces and the minimum/base/maximum shaper
+rates for **both** directions — including a direction whose shaping you have
+turned off. Everything else has a working default. In LuCI these live on the
+**Essentials** tab, where the rates sit under a *Download rates* and an *Upload
+rates* heading; in UCI they are the first block of the section:
 
-![The Essentials tab: the Enabled switch, the DL/UL interface pickers each
-confirming which live SQM device backs them, and the six min/base/max shaper
-rate fields with their units and ordering rules](images/config-essentials.png)
+![The Essentials tab: the Enabled switch, the download and upload interface
+pickers each confirming which live SQM device backs them, and the six shaper
+rate fields under their Download rates and Upload rates
+headings](images/config-essentials.png)
 
 ```
 config cake-autorate 'primary'
@@ -68,7 +71,7 @@ you can jump straight to an option by name:
 
 | Group (tab) | What it covers |
 | --- | --- |
-| **Essentials** | Interfaces + min/base/max rates (above). |
+| **Essentials** | Interfaces + minimum/base/maximum rates for both directions (above). |
 | **Shaper rates & response** | How aggressively the rate moves up/down on load and bufferbloat (`shaper_rate_adjust_*`, `high_load_thr`, refractory periods). |
 | **Pingers** | Probe binary (`fping`), pinger count and ping interval. |
 | **Reflectors** | The ICMP target pool and how misbehaving reflectors are detected and rotated. |
@@ -198,12 +201,15 @@ text.
 
 ## Reading the statistics graphs
 
-`luci-app-cake-autorate` ships a collectd graph definition, so once the package
-is installed and collectd is running you get RRD graphs with **no extra setup**.
+`luci-app-cake-autorate` ships a collectd graph definition and depends on
+`luci-app-statistics`, so the graphs are there as soon as the package is. They
+need **one** setting to start receiving data — see [the caveat
+below](#statistics-caveat-collectd-must-be-told-to-read-the-drop-in) — and then:
 
 1. Go to **Statistics → Graphs** (from `luci-app-statistics`).
-2. Select the **CAKE Autorate** plugin. There is **one panel per instance** (the
-   collectd plugin instance is the cake-autorate instance id, e.g. `primary`).
+2. Select the **CAKE Autorate** plugin. Each instance gets its own **set of
+   three panels** (the collectd plugin instance is the cake-autorate instance
+   id, e.g. `primary`, and appears in every panel title).
 3. Each panel graphs, per direction (download/upload):
    - **achieved rate** and **CAKE shaper rate** (Kbit/s) — watch the shaper rate
      track load: it climbs toward `max` under sustained high load and decays back
@@ -211,8 +217,15 @@ is installed and collectd is running you get RRD graphs with **no extra setup**.
    - **average one-way-delay delta** (µs) — the latency signal that drives the
      controller;
    - **load / bufferbloat state** — a gauge where `0`/`1`/`2` = idle/low/high
-     load and a value `>= 10` means bufferbloat is currently flagged (the load
-     level is the value mod 10).
+     load and a value of 10 or more means bufferbloat is currently flagged (the
+     load level is the value mod 10).
+
+![The Statistics graph page on the CAKE Autorate tab: shaper and achieved rates
+plotted with upload mirrored below the axis, the one-way-delay delta and the
+load state, one set of panels per instance](images/statistics-graphs.png)
+
+Upload series are drawn **below** the axis in the classic SQM mirror layout, so
+the two directions read apart at a glance.
 
 With the default `pinger_binary` of `fping`, the **download and upload OWD delta
 curves are identical**, because ICMP echo has no one-way delay to measure:
@@ -260,12 +273,34 @@ sending ICMP to the reflectors on a link nobody is using. Lowering
 but upstream **refuses to start** if it exceeds either `min_dl_shaper_rate_kbps`
 or `min_ul_shaper_rate_kbps`, so it can only go down, not up.
 
-### Statistics caveat
+### Statistics caveat: collectd must be told to read the drop-in
 
 The package drops its collectd config at `/etc/collectd/conf.d/cake-autorate.conf`
 and loads the `exec` plugin there itself (the `tail` plugin cannot map the
-string load-condition to a number). For this to take effect, collectd's main
-config must **Include `/etc/collectd/conf.d`** — the stock
-`luci-app-statistics` setup does. If you run a hand-rolled collectd config that
-does not include that directory, add it, or the CAKE Autorate graphs will not
-appear even though the daemon is logging fine.
+string load-condition to a number). For that to take effect, collectd's main
+config must **Include `/etc/collectd/conf.d`** — and on OpenWrt 25.12.5 it does
+not.
+
+`luci-app-statistics` replaces `/etc/collectd.conf` with a symlink to a config
+it generates from `/etc/config/luci_statistics`, and the config file it ships
+has the `Include` line **commented out**:
+
+```
+config statistics 'collectd'
+	option BaseDir '/var/run/collectd'
+#	option Include '/etc/collectd/conf.d'
+```
+
+So on a fresh install the drop-in is never read, and the **CAKE Autorate** tab
+under Statistics → Graphs stays empty however long collectd runs — even though
+the daemon is logging fine and the reader script works. Uncomment it, or set it
+from the command line, and restart:
+
+```sh
+uci set luci_statistics.collectd.Include='/etc/collectd/conf.d'
+uci commit luci_statistics
+/etc/init.d/luci_statistics restart
+```
+
+The same applies to a hand-rolled collectd config that does not include that
+directory.

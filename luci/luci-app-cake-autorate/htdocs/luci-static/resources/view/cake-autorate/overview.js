@@ -35,7 +35,8 @@
  */
 
 /*
- * The upstream tag this feed builds, restated for the footer.
+ * The upstream tag this feed builds, restated for the footer and used to pin
+ * the per-option reference link below.
  *
  * RENOVATE OWNS THIS LINE. The `lynxthecat/cake-autorate` custom manager in
  * renovate.json rewrites it in the same PR that moves PKG_VERSION in
@@ -52,7 +53,35 @@
  * its own (luci-app-cake-autorate follows the repo tag) and it is not this one.
  */
 var UPSTREAM_VERSION = '3.2.2';
-var DOC_URL = 'https://github.com/lynxthecat/cake-autorate/wiki';
+
+/*
+ * Upstream's per-option reference, which is defaults.sh and not the README.
+ *
+ * The README documents the PROJECT -- theory of operation, installation -- and
+ * names individual options only in passing prose, under no heading of their
+ * own. There is no anchor to link an option to, so a per-option deep link into
+ * it is not a thing that exists. defaults.sh is where every option is actually
+ * written down, one per line, each with its own comment.
+ *
+ * That makes this a deep link in practice without being one in the URL: each
+ * row of the form now prints its UCI key (see describe()), and the key is what
+ * the reader searches for once they land here. Doing it as 66 real
+ * "blob/<tag>/defaults.sh#L<n>" links was the alternative and was rejected --
+ * that is 66 line numbers to re-check by hand on every upstream bump, silently
+ * wrong the moment upstream inserts a line, to save one Ctrl-F.
+ *
+ * Pinned to the tag we actually ship rather than to a branch, so the file a
+ * reader lands on is the one their daemon was built from: upstream keeps
+ * adding and renaming options, and HEAD would document some this package does
+ * not have.
+ *
+ * It concatenates UPSTREAM_VERSION rather than spelling the number a second
+ * time: that is the single-literal rule above, and it is also why this link
+ * needs no attention on a bump. Renovate moves the constant and the URL follows.
+ */
+var DOC_URL = 'https://github.com/lynxthecat/cake-autorate/blob/v' +
+	UPSTREAM_VERSION + '/defaults.sh';
+var DOC_TITLE = _('Upstream option reference (defaults.sh)');
 
 /* Derives the shaping interfaces from the live SQM config, so dl_if / ul_if can
  * offer checked choices instead of free text. */
@@ -64,73 +93,222 @@ var callSqmInterfaces = rpc.declare({
 
 var TABS = [
 	{ id: 'essentials', title: _('Essentials'),
-	  descr: _('The minimum a fresh instance needs: the two interfaces and the min/base/max shaper rates for each direction. Everything else has a working default.') },
+	  descr: _('Required configuration to use cake-autorate. You must set all of these options, even if upload or download shaping is disabled.') },
 	{ id: 'shaper', title: _('Shaper rates & response'),
-	  descr: _('How aggressively the shaper rate is moved up and down in response to load and bufferbloat.'), doc: true },
+	  descr: _('How aggressively the shaper rate is moved up and down in response to load and bufferbloat.') },
 	{ id: 'pingers', title: _('Pingers'),
 	  descr: _('Which probe binary is used and how many reflectors are pinged how often.') },
 	{ id: 'reflectors', title: _('Reflectors'),
-	  descr: _('The pool of ICMP targets and how misbehaving ones are detected and rotated out.'), doc: true },
+	  descr: _('The pool of ICMP targets and how misbehaving ones are detected and rotated out.') },
 	{ id: 'detection', title: _('Delay & bufferbloat detection'),
-	  descr: _('One-way-delay thresholds and the EWMA smoothing that decide when the link is bufferbloated.'), doc: true },
+	  descr: _('One-way-delay thresholds and the EWMA smoothing that decide when the link is bufferbloated.') },
 	{ id: 'idle', title: _('Idle, sleep & stalls'),
 	  descr: _('When the connection counts as idle or stalled and how the pingers sleep to save CPU.') },
 	{ id: 'logging', title: _('Logging & output'),
 	  descr: _('Which log streams the daemon emits. Options marked package-managed are overridden by the service so the status view and collectd always have data.') }
 ];
 
+/*
+ * How one underscore-separated word of a UCI option name is rendered in the
+ * field title.
+ *
+ * Two rules, and they pull in opposite directions on purpose. A genuine
+ * acronym (OWD, EWMA, CAKE) is written the way its field is discussed
+ * everywhere else, in capitals. Everything else is a TRUNCATION -- min, max,
+ * thr, avg, args, if, no -- and truncations are expanded, because a form is
+ * read by someone who does not yet know the vocabulary and "Min" is only
+ * shorter for the person who already did.
+ *
+ * `dl`/`ul` sit in the second group despite looking like the first: nothing
+ * else in this UI says DL, the status table's own columns are headed Download
+ * and Upload, and the two differ by one letter in a form that lists both.
+ *
+ * A mapped word is emitted VERBATIM (only unmapped words get capitalised by
+ * humanize), so every value here carries its own casing.
+ */
 var ACRONYMS = {
-	dl: 'DL', ul: 'UL', owd: 'OWD', ewma: 'EWMA', kbps: 'Kbit/s',
-	ms: 'ms', kb: 'KB', thr: 'threshold', avg: 'avg', mins: 'min',
-	'if': 'interface', args: 'args'
+	/* acronyms -- kept, in their own casing */
+	owd: 'OWD', ewma: 'EWMA', cake: 'CAKE',
+	/* truncations -- expanded */
+	dl: 'Download', ul: 'Upload', min: 'Minimum', max: 'Maximum',
+	thr: 'Threshold', avg: 'Average', 'no': 'Number of', 'if': 'Interface',
+	args: 'Arguments'
+};
+
+/*
+ * Trailing unit suffixes, rendered as a parenthesised unit rather than as
+ * another word of the title: "Startup Wait (seconds)", not "Startup Wait S".
+ *
+ * They are spelled out for the same reason the truncations above are, with one
+ * exception -- Kbit/s, which is how a rate is written on every ISP's own page
+ * and in luci-app-sqm next door, and whose expansion ("kilobits per second")
+ * nobody wants in a field label.
+ *
+ * Applied ONLY to the last word of a name. Every one of these is a suffix in
+ * the 66 upstream keys, and a `_s_` in the middle of some future name would be
+ * a word, not a unit.
+ */
+var UNITS = {
+	kbps: 'Kbit/s', ms: 'milliseconds', s: 'seconds', mins: 'minutes',
+	kb: 'kilobytes', b: 'bytes'
+};
+
+/*
+ * Titles humanize() must not be allowed to derive from the key.
+ *
+ * humanize() splits on "_" and cannot know that up|load and down|load are a
+ * boundary between two ideas rather than a split word, so
+ * shaper_rate_adjust_up_load_high came out as "Shaper Rate Adjust Up Load
+ * High" -- which reads as UPLOAD, the one thing it does not mean.
+ *
+ * "Up"/"down" is the direction of the rate MULTIPLIER; "load high"/"load low"
+ * is the traffic-load condition that triggers it. Upstream defaults.sh says so
+ * in its own comments -- 1.04 is "how rapidly to increase shaper rate upon high
+ * load detected", 0.99 and 1.01 are "how rapidly to return down/up to base
+ * shaper rate upon idle or low load detected" -- and the defaults confirm it:
+ * the "up" keys are >= 1 and the "down" key is <= 1. Traffic direction is
+ * dl/ul everywhere in this config (adjust_dl_shaper_rate, min_ul_shaper_rate_
+ * kbps) and never up/down, so there is no reading where these three name one.
+ *
+ * These are the only three keys where the generic path lands on a wrong word,
+ * so this stays a short exception list rather than a second naming scheme.
+ */
+var TITLE_OVERRIDES = {
+	shaper_rate_adjust_up_load_high: _('Rate Increase While Load Is High'),
+	shaper_rate_adjust_down_load_low: _('Decay Toward Base From Above (low load)'),
+	shaper_rate_adjust_up_load_low: _('Decay Toward Base From Below (low load)')
 };
 
 function humanize(name) {
-	return name.split('_').map(function (w) {
+	if (TITLE_OVERRIDES[name])
+		return TITLE_OVERRIDES[name];
+
+	var words = name.split('_');
+	var unit = (words.length > 1) ? UNITS[words[words.length - 1].toLowerCase()] : null;
+	if (unit)
+		words = words.slice(0, -1);
+
+	var title = words.map(function (w) {
 		return ACRONYMS[w.toLowerCase()] || (w.charAt(0).toUpperCase() + w.slice(1));
 	}).join(' ');
+
+	return unit ? (title + ' (' + unit + ')') : title;
 }
 
 /*
- * The visible help for one option: prose plus its unit/range hint.
+ * SUBHEADINGS -- an option name that a heading is drawn immediately BEFORE.
  *
- * Deliberately does not print the UCI key. No LuCI app in the feed does, not
- * even luci-app-sqm -- the closest comparison, which also wraps a documented
- * shaper and still writes "Latency target (ingress)" rather than `itarget`.
- * Repeating the key on all 66 rows is noise, and it stays reachable anyway: the
- * search box matches UCI names, and every row carries data-name in the DOM.
+ * Essentials lists six rate fields whose titles differ only by the direction
+ * word buried in the middle of each: Minimum Download Shaper Rate, then five
+ * more of the same shape. Read at a glance they are one undifferentiated block
+ * of six, and the field you want is found by reading every title. Two headings
+ * split it into the two trios it always was, so the direction is established
+ * once, above the group, instead of once per row.
+ */
+var SUBHEADINGS = {
+	min_dl_shaper_rate_kbps: _('Download rates'),
+	min_ul_shaper_rate_kbps: _('Upload rates')
+};
+
+/*
+ * A full-width heading occupying one option row.
+ *
+ * form.DummyValue is the base because it already declines to touch UCI --
+ * write() and remove() are no-ops upstream -- so a heading can never reach the
+ * config bridge as a stray key. cfgvalue() is stubbed for the same reason: with
+ * no UCI option behind the name there is nothing to read either.
+ *
+ * The title is left EMPTY on purpose. form.js only builds the label column and
+ * the value column when a title is set, so an empty one gives the heading the
+ * whole row instead of indenting it into the value column like a field value.
+ */
+var SubHeading = form.DummyValue.extend({
+	__name__: 'CBI.CakeSubHeading',
+
+	cfgvalue: function () { return null; },
+
+	/*
+	 * Nothing to parse, and saying so matters. The inherited parse() treats a
+	 * rendered row with no widget value as an EMPTY REQUIRED field and rejects
+	 * the whole Save & Apply with 'Option "..." must not be empty' -- a heading
+	 * has no value by construction, so it would block every save on the page.
+	 */
+	parse: function () { return Promise.resolve(); },
+
+	renderWidget: function () {
+		return E('h4', { 'class': 'cake-subhead' }, this.subhead);
+	}
+});
+
+/*
+ * The visible help for one option: the sentence, then the UCI key it writes.
+ *
+ * The sentence is opt.desc verbatim -- whole sentences that carry their own
+ * units and constraints. It used to be desc plus a separate hint glued on after
+ * an em dash -- "Rotate the log file once this many KB of log lines have
+ * accumulated.  —  KB, > 0" -- which said the unit twice, in two registers,
+ * and made the sentence the shorter half of its own help text.
+ *
+ * WHY THE KEY IS PRINTED AFTER ALL
+ *   This used to end at the sentence, on the grounds that no LuCI app in the
+ *   feed prints UCI keys (luci-app-sqm writes "Latency target (ingress)", not
+ *   `itarget`), that 66 repeats are noise, and that the key stays reachable via
+ *   the search box and each row's data-name.
+ *
+ *   That reasoning answers "how do I find this FIELD", which the search box
+ *   does solve. It does not answer "what does upstream say about this option",
+ *   which is the question the key actually gets asked for: upstream documents
+ *   every option by its key in defaults.sh, this form paraphrases them into
+ *   prose, and TITLE_OVERRIDES above now deliberately breaks the last
+ *   mechanical link between title and key. Without the key on the row there is
+ *   nothing to carry across to upstream's file, a `grep`, or a forum thread --
+ *   and data-name is only reachable by opening devtools.
+ *
+ * WHY IT IS MARKUP AND NOT A NODE
+ *   form.js renders the description ONLY when typeof description === 'string'
+ *   (a Node or an array is silently dropped and the help vanishes), and
+ *   luci.js dom.append assigns a bare string child through innerHTML. So <code>
+ *   here is rendered as an element, and escaping is this function's problem.
+ *   Every name is a hardcoded literal in options.js -- never user input, never
+ *   a UCI value -- and no desc string contains <, > or &, so there is nothing
+ *   to escape. opt.doc is interpolated into an href on the same terms, and is
+ *   likewise a literal. All three are asserted by the unit test.
  */
 function describe(opt) {
-	var d = opt.desc;
-	if (opt.units)
-		d += '  —  ' + opt.units;
-	return d;
+	var help = opt.desc + ' (<code>' + opt.name + '</code>)';
+
+	/* The eight algorithm options carry opt.doc (see options.js DOC). Separator
+	 * is the middot this page already uses between the version and the header
+	 * link, NOT an em dash: an earlier pass took em-dash tails out of this help
+	 * text because what followed them restated the sentence in a worse register.
+	 * A link is not that -- it is somewhere else to go, and it only appears on
+	 * the rows where a sentence provably is not enough. */
+	if (opt.doc)
+		help += ' \u00b7 <a href="' + opt.doc + '" target="_blank"' +
+			' rel="noreferrer">' + _('Theory of Operation') + '</a>';
+
+	return help;
 }
 
 /*
  * Turn a checkRateOrder() code into a sentence that names the two fields in the
  * words the form uses, states the rule, and shows the values that broke it.
+ *
+ * BOTH fields are named in full, direction included. "must not exceed the base
+ * rate" leaves the reader to work out which base -- and this form has two of
+ * every rate, so an error raised on the upload trio while the eye is on the
+ * download one is exactly the case worth being unambiguous about.
  */
 function rateOrderMessage(dir, err) {
 	var d = (dir === 'dl') ? _('download') : _('upload');
 	switch (err.code) {
 		case 'min-gt-base':
-			return _('Minimum %s rate (%d) must not exceed the base rate (%d).').format(d, err.a, err.b);
+			return _('Minimum %s rate (%d) must not exceed the base %s rate (%d).').format(d, err.a, d, err.b);
 		case 'max-lt-base':
-			return _('Maximum %s rate (%d) must not be below the base rate (%d).').format(d, err.a, err.b);
+			return _('Maximum %s rate (%d) must not be below the base %s rate (%d).').format(d, err.a, d, err.b);
 		default:
-			return _('Minimum %s rate (%d) must not exceed the maximum rate (%d).').format(d, err.a, err.b);
+			return _('Minimum %s rate (%d) must not exceed the maximum %s rate (%d).').format(d, err.a, d, err.b);
 	}
-}
-
-/* A tab description node with an optional upstream documentation link. */
-function tabDescr(tab) {
-	if (!tab.doc)
-		return tab.descr;
-	return E('span', {}, [
-		tab.descr, ' ',
-		E('a', { 'href': DOC_URL, 'target': '_blank', 'rel': 'noreferrer' }, _('Upstream documentation →'))
-	]);
 }
 
 /* --- search/filter -------------------------------------------------------
@@ -152,6 +330,14 @@ function applyFilter(mapEl, statusEl, query) {
 
 	mapEl.classList.add('cake-filtering');
 	rows.forEach(function (r) {
+		/* A heading groups the rows that follow it. Filtering flattens every
+		 * tab into one list and drops most of those rows, so a heading has
+		 * nothing left to head -- hide them all rather than caption a result
+		 * set they no longer describe. */
+		if (r.querySelector('.cake-subhead')) {
+			r.style.display = 'none';
+			return;
+		}
 		var name = r.getAttribute('data-name') || '';
 		var titleEl = r.querySelector('.cbi-value-title');
 		var title = titleEl ? titleEl.textContent : '';
@@ -291,14 +477,30 @@ return view.extend({
 			return el;
 		};
 
+		/*
+		 * Tab descriptions are STRINGS, never DOM nodes.
+		 *
+		 * s.tab() is called once for the section type, but renderTabContainers
+		 * runs per instance and appends whatever `description` holds into that
+		 * instance's pane. A string is re-created each time; a node is one
+		 * object, so appending it to the second instance MOVES it out of the
+		 * first. Three tabs used to carry a node here -- a description plus a
+		 * documentation link -- and on a two-WAN box those three tabs showed no
+		 * description at all on every instance but the last.
+		 *
+		 * The link that made them nodes is gone rather than fixed: it pointed at
+		 * the same repository root as the link in the page header, a few lines
+		 * above, with no anchor to distinguish it.
+		 */
 		TABS.forEach(function (t) {
-			s.tab(t.id, t.title, tabDescr(t));
+			s.tab(t.id, t.title, t.descr);
 		});
 
 		/* The procd gate. Not one of the 66 upstream options and never written
 		 * into the daemon config; leads the Essentials tab. */
 		var en = s.taboption('essentials', form.Flag, 'enabled', _('Enabled'),
-			_('Master switch for this instance (procd). Turn on once the interfaces and rates are correct for your line.'));
+			_('Master switch for this instance. Turn on once the interfaces and rates are correct for your line.') +
+			' (<code>enabled</code>)');
 		en.rmempty = false;
 
 		/* dl_if / ul_if options, captured so the post-render pass can seed their
@@ -314,6 +516,13 @@ return view.extend({
 			var o, dt = options.datatypeFor(opt);
 			var title = humanize(opt.name);
 			var descr = describe(opt);
+
+			/* taboption() renders in call order, so adding the heading here --
+			 * before this option's own field -- is what places it. */
+			if (SUBHEADINGS[opt.name]) {
+				var h = s.taboption(opt.group, SubHeading, '_subhead_' + opt.name, '');
+				h.subhead = SUBHEADINGS[opt.name];
+			}
 
 			/* The two interface fields become comboboxes offering the SQM-derived
 			 * devices. Free text is still accepted, so a value set before SQM
@@ -422,21 +631,39 @@ return view.extend({
 				'#cake-autorate-toolbar{display:flex;flex-wrap:wrap;gap:.5em;align-items:center;margin:.5em 0;}' +
 				'#cake-autorate-filter{flex:1 1 20em;max-width:32em;}' +
 				'#cake-autorate-filter-status{opacity:.75;font-size:90%;}' +
+				/* The UCI key describe() appends. The stock themes leave <code>
+				 * inside a description at body size and body colour, where it
+				 * competes with the sentence it is annotating; this makes it read
+				 * as a key -- monospace, slightly smaller, slightly muted --
+				 * without inventing a colour the theme does not have. */
+				'.cbi-value-description code{font-family:monospace;font-size:92%;opacity:.8;}' +
 				'.cake-if-warn{margin-top:.4em;padding:.4em .6em;font-size:90%;}' +
-				'.cake-if-warn.cake-if-ok{color:#2e7d32;padding:.2em 0;}'));
+				'.cake-if-warn.cake-if-ok{color:#2e7d32;padding:.2em 0;}' +
+				/* flex-basis 100%: a .cbi-value row is a flex container in the
+				 * stock themes, and without it the heading shares the line with
+				 * the (empty) label column instead of spanning the row. */
+				'.cake-subhead{flex:1 1 100%;width:100%;display:block;' +
+				'margin:1.2em 0 .2em;padding-bottom:.2em;font-size:1.05em;' +
+				'border-bottom:1px solid rgba(128,128,128,.35);}'));
 
 			nodes.push(E('p', {}, [
 				E('strong', {}, 'cake-autorate ' + UPSTREAM_VERSION), ' · ',
-				E('a', { 'href': DOC_URL, 'target': '_blank', 'rel': 'noreferrer' }, _('Upstream documentation'))
+				E('a', { 'href': DOC_URL, 'target': '_blank', 'rel': 'noreferrer' }, DOC_TITLE)
 			]));
 
-			/* Say what the interface fields are checked against, so a missing SQM
-			 * config is not mistaken for a bug. */
-			nodes.push(E('p', { 'id': 'cake-autorate-sqm-note', 'class': 'cbi-value-description' },
-				sqm && sqm.sqm_config_present
-					? _('Interface fields are validated against the live SQM config. Egress (ul_if) choices: %s. Ingress IFB (dl_if) choices: %s.')
-						.format(ifChoices.ul.join(', ') || _('(none)'), ifChoices.dl.join(', ') || _('(none)'))
-					: _('SQM is not configured yet, so the interface fields cannot be validated against a live CAKE qdisc. Configure SQM first; the fields still accept a value.')));
+			/* The one thing this page cannot say field by field: SQM is missing
+			 * altogether, so there is no qdisc for any instance to adjust.
+			 *
+			 * Its counterpart -- naming the egress/ingress choices when SQM IS
+			 * configured -- used to sit here too and is gone: the interface
+			 * fields already offer exactly those devices in their dropdowns and
+			 * annotate the chosen one underneath, so restating the same two
+			 * lists at the top of the page was a third copy of an answer the
+			 * user is looking straight at. */
+			if (!(sqm && sqm.sqm_config_present)) {
+				nodes.push(E('p', { 'id': 'cake-autorate-sqm-note', 'class': 'cbi-value-description' },
+					_('SQM is not configured yet, so the interface fields cannot be validated against a live CAKE qdisc. Configure SQM first; the fields still accept a value.')));
+			}
 
 			if (!coverage.ok) {
 				nodes.push(E('div', { 'class': 'alert-message error' }, [

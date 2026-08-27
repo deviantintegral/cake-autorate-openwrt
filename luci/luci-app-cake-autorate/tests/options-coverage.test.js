@@ -245,4 +245,67 @@ test('instanceNameSuggestions: no SQM means no suggestions, not a bad list', fun
 	assert.deepStrictEqual(mod.instanceNameSuggestions(['---'], []), []);
 });
 
+/* --- describe() renders through innerHTML ---------------------------------
+ *
+ * overview.js describe() returns `desc + ' (<code>' + name + '</code>)'`, and
+ * LuCI puts that string on the page with innerHTML (luci.js dom.append assigns
+ * a bare string child that way; form.js renders the description only when it IS
+ * a string, so a DOM node cannot be used instead). That makes escaping the
+ * caller's problem, and these two assertions are the reason it needs no
+ * escaping: nothing in the metadata carries a character innerHTML would read as
+ * markup.
+ *
+ * If a future option name or description ever needs an angle bracket or an
+ * ampersand -- "delta > threshold" is the plausible one -- this test fails
+ * FIRST, and the fix is to escape in describe(), not to relax the test. */
+
+test('option names are safe to interpolate into markup', function () {
+	mod.OPTIONS.forEach(function (o) {
+		/* Upstream's own casing is kept verbatim (log_DEBUG_messages_to_syslog),
+		 * so this asserts the character SET, not a casing convention. */
+		assert.ok(/^[A-Za-z0-9_]+$/.test(o.name),
+			o.name + ' must be letters/digits/underscore only');
+	});
+});
+
+test('descriptions carry no characters innerHTML would read as markup', function () {
+	mod.OPTIONS.forEach(function (o) {
+		assert.ok(!/[<>&]/.test(o.desc),
+			o.name + ' description must not contain <, > or &');
+	});
+});
+
+test('doc links are plain https URLs, safe inside an href', function () {
+	mod.OPTIONS.forEach(function (o) {
+		if (o.doc === undefined)
+			return;
+		/* describe() interpolates this straight into href="..." with no
+		 * escaping, so a quote would end the attribute and anything after it
+		 * would be parsed as markup. https:// specifically -- not just "no
+		 * quotes" -- because javascript: and data: are URLs too. */
+		assert.ok(/^https:\/\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/.test(o.doc),
+			o.name + ' doc must be a plain https URL, got: ' + o.doc);
+		assert.ok(o.doc.indexOf('"') === -1 && o.doc.indexOf("'") === -1,
+			o.name + ' doc must not contain a quote');
+	});
+});
+
+test('the options carrying doc are the algorithm parameters', function () {
+	/* Guards the claim describe() makes by only linking SOME rows: the link is
+	 * worth showing because it is selective. If a later option picks up doc by
+	 * copy-paste, this fails and the choice has to be made deliberately. */
+	var withDoc = mod.OPTIONS.filter(function (o) { return o.doc; })
+		.map(function (o) { return o.name; }).sort();
+	assert.deepStrictEqual(withDoc, [
+		'alpha_baseline_decrease',
+		'alpha_baseline_increase',
+		'alpha_delta_ewma',
+		'dl_owd_delta_thr_ms',
+		'reflectors',
+		'shaper_rate_max_adjust_down_bufferbloat',
+		'shaper_rate_min_adjust_down_bufferbloat',
+		'ul_owd_delta_thr_ms'
+	]);
+});
+
 console.log('\n' + passed + ' tests passed');

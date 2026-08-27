@@ -162,6 +162,24 @@ parsers):
   `sqm.js` spells it out for the same reason). Covered by
   `tests/statistics/test-graph-definition.sh`, which also asserts the definition
   and the exec reader name the same metrics.
+- **luci-app-statistics does not load our collectd drop-in.** It replaces
+  `/etc/collectd.conf` with a symlink to a config it generates from
+  `/etc/config/luci_statistics`, and the file it ships in the 25.12 series has
+  `option Include '/etc/collectd/conf.d'` **commented out**. Until a user sets
+  it, `/etc/collectd/conf.d/cake-autorate.conf` is never read and the graphs
+  stay empty however long collectd runs — the LuCI dependency buys the
+  Statistics menu and the definitions tree, nothing more. Do not write that it
+  wires this up for us; the one-liner users need is in
+  `docs/configuration.md` under "Statistics caveat", and the serve harness
+  applies the same setting behind `CA_UI_STATISTICS=1`.
+- **A LuCI tab description must be a STRING, never a DOM node.** `s.tab()` is
+  called once for the section type, but `renderTabContainers` runs per instance
+  and appends whatever `description` holds into that instance's pane. A string
+  is re-created each time; a node is one object, so appending it to the second
+  instance *moves it out of the first* — three tabs once carried a node (to hold
+  a link) and showed no description at all on every instance but the last, which
+  reads as a missing description rather than a reused node. Same trap for
+  anything else handed to LuCI once and rendered per section.
 - **libuci + `set -u`.** OpenWrt's `/lib/functions.sh` is not nounset-clean; any
   script that runs `set -u` and sources it must wrap the `config_load`/
   `config_foreach` block in `set +u` (the bridge and the rpcd backend both do).

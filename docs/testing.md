@@ -251,6 +251,20 @@ npx playwright test --project=visual --update-snapshots
 
 Review the resulting PNG changes before committing them.
 
+**`--update-snapshots` does not refresh every stale baseline.** Bare, it means
+`--update-snapshots=changed`, and "changed" is judged by the same
+`maxDiffPixelRatio` (0.002) the assertions use. A real UI change too small to
+trip that tolerance leaves the committed baseline **stale while the run reports
+success** — adding a short link to the end of an existing line does it, if
+nothing reflows. The mismatch then sits in the tree until some later, larger
+change on the same page happens to rewrite it.
+
+If a change should have moved a baseline and did not, do not assume it was not
+rendered. Delete that one PNG and re-run: a *missing* snapshot is always
+written. `--update-snapshots=all` rewrites everything unconditionally, which
+also works, but it re-encodes the untouched baselines too and commits a page of
+anti-aliasing noise with them.
+
 ### The review gallery
 
 After a capture, build a browsable, labelled gallery of every page/state:
@@ -279,6 +293,31 @@ third Playwright project:
 cd tests/ui
 npx playwright test --project=docs      # writes docs/images/*.png
 ```
+
+One image needs more than that. `statistics-graphs.png` shows the collectd
+dashboard, and while `luci-app-statistics` is always installed (the LuCI app
+depends on it), a serve VM has no `cake_autorate` RRDs behind it: collectd is
+not told to read the package's drop-in, and a VM minutes old has nothing to
+graph anyway. Turn that path on for the docs run:
+
+```sh
+cd tests/ui
+CA_UI_STATISTICS=1 npx playwright test --project=docs
+```
+
+That makes serve mode set the `Include /etc/collectd/conf.d` that
+luci-app-statistics' generated config omits (see
+[`configuration.md`](configuration.md#statistics-caveat-collectd-must-be-told-to-read-the-drop-in)), put real load on the
+primary WAN so the shaper moves, and collect for `CA_UI_STATS_WARMUP_S` seconds
+(default 600) **before** reporting the VM ready — so the run opens on a
+dashboard with data in it rather than racing collectd's first sample. Budget
+about ten minutes more wall-clock. Without the variable that one test **skips**,
+naming the variable in the skip reason; the other five images still regenerate.
+
+It also shortens collectd's interval and adds a 15-minute RRA, so a VM that is
+minutes old draws a readable graph instead of a sliver against an empty
+two-hour axis. Those are demo-box settings — the timespan dropdown in that
+screenshot therefore offers a `15min` span a stock install does not.
 
 It is a generator, not a test: it asserts nothing and compares against no
 baseline. **CI never runs it** (the workflow names `--project=functional` and
