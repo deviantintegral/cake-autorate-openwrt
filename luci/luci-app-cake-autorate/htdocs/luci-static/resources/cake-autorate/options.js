@@ -173,7 +173,7 @@ var OPTIONS = [
 	{ name: 'log_DEBUG_messages_to_syslog', group: 'logging', type: 'bool', def: 0, managed: true,
 	  desc: 'Also send every DEBUG record to syslog (very high volume). Package-managed: the service forces this off.', units: '0 or 1' },
 	{ name: 'log_to_file', group: 'logging', type: 'bool', def: 1, managed: true,
-	  desc: 'Write the log stream to the log file. Package-managed: the service forces this on (procd has no terminal).', units: '0 or 1' },
+	  desc: 'Write the log stream to the log file. Package-managed: the service forces this on, because a supervised background service has no terminal to write to.', units: '0 or 1' },
 	{ name: 'log_file_max_time_mins', group: 'logging', type: 'integer', lo: 1,
 	  desc: 'Rotate the log file once this many minutes of log lines have accumulated.', units: 'minutes, > 0' },
 	{ name: 'log_file_max_size_KB', group: 'logging', type: 'integer', lo: 1,
