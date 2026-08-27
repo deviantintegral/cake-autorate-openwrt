@@ -170,7 +170,13 @@ var SubHeading = form.DummyValue.extend({
 });
 
 /*
- * The visible help for one option: prose plus its unit/range hint.
+ * The visible help for one option.
+ *
+ * It is opt.desc verbatim: whole sentences that carry their own units and
+ * constraints. It used to be desc plus a separate hint glued on after an em
+ * dash -- "Rotate the log file once this many KB of log lines have
+ * accumulated.  —  KB, > 0" -- which said the unit twice, in two registers,
+ * and made the sentence the shorter half of its own help text.
  *
  * Deliberately does not print the UCI key. No LuCI app in the feed does, not
  * even luci-app-sqm -- the closest comparison, which also wraps a documented
@@ -179,10 +185,7 @@ var SubHeading = form.DummyValue.extend({
  * search box matches UCI names, and every row carries data-name in the DOM.
  */
 function describe(opt) {
-	var d = opt.desc;
-	if (opt.units)
-		d += '  —  ' + opt.units;
-	return d;
+	return opt.desc;
 }
 
 /*
