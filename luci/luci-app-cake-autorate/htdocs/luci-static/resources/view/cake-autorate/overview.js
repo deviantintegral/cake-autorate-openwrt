@@ -90,15 +90,38 @@ var ACRONYMS = {
 	/* truncations -- expanded */
 	dl: 'Download', ul: 'Upload', min: 'Minimum', max: 'Maximum',
 	thr: 'Threshold', avg: 'Average', 'no': 'Number of', 'if': 'Interface',
-	args: 'Arguments',
-	/* units */
-	kbps: 'Kbit/s', ms: 'ms', kb: 'KB', mins: 'min'
+	args: 'Arguments'
+};
+
+/*
+ * Trailing unit suffixes, rendered as a parenthesised unit rather than as
+ * another word of the title: "Startup Wait (seconds)", not "Startup Wait S".
+ *
+ * They are spelled out for the same reason the truncations above are, with one
+ * exception -- Kbit/s, which is how a rate is written on every ISP's own page
+ * and in luci-app-sqm next door, and whose expansion ("kilobits per second")
+ * nobody wants in a field label.
+ *
+ * Applied ONLY to the last word of a name. Every one of these is a suffix in
+ * the 66 upstream keys, and a `_s_` in the middle of some future name would be
+ * a word, not a unit.
+ */
+var UNITS = {
+	kbps: 'Kbit/s', ms: 'milliseconds', s: 'seconds', mins: 'minutes',
+	kb: 'kilobytes', b: 'bytes'
 };
 
 function humanize(name) {
-	return name.split('_').map(function (w) {
+	var words = name.split('_');
+	var unit = (words.length > 1) ? UNITS[words[words.length - 1].toLowerCase()] : null;
+	if (unit)
+		words = words.slice(0, -1);
+
+	var title = words.map(function (w) {
 		return ACRONYMS[w.toLowerCase()] || (w.charAt(0).toUpperCase() + w.slice(1));
 	}).join(' ');
+
+	return unit ? (title + ' (' + unit + ')') : title;
 }
 
 /*
