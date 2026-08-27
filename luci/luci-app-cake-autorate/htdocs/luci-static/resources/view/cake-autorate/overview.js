@@ -331,7 +331,7 @@ return view.extend({
 		/* The procd gate. Not one of the 66 upstream options and never written
 		 * into the daemon config; leads the Essentials tab. */
 		var en = s.taboption('essentials', form.Flag, 'enabled', _('Enabled'),
-			_('Master switch for this instance (procd). Turn on once the interfaces and rates are correct for your line.'));
+			_('Master switch for this instance. Turn on once the interfaces and rates are correct for your line.'));
 		en.rmempty = false;
 
 		/* dl_if / ul_if options, captured so the post-render pass can seed their
