@@ -10,7 +10,7 @@ Three layers, all wired into `.github/workflows/ci.yml`:
 3. **Playwright UI suites** (`tests/ui/`) — drive the LuCI app in a browser
    against the live LuCI the harness boots (functional + visual-regression).
 
-Layers 2 and 3 are pinned to **OpenWrt 25.12.5** and install the built packages
+Layers 2 and 3 are pinned to **OpenWrt 25.12.6** and install the built packages
 with **`apk`**.
 
 ## Unit suites
@@ -56,7 +56,7 @@ NOTE and are covered on-device by the VM harness instead.
 ## Building the apks first
 
 Both VM suites install the two **noarch** `.apk`s. Build them with the pinned
-25.12.5 SDK (full steps in the [README](../README.md#building-with-the-openwrt-251205-sdk)):
+25.12.6 SDK (full steps in the [README](../README.md#building-with-the-openwrt-251205-sdk)):
 
 ```sh
 make package/cake-autorate/compile V=s
@@ -74,7 +74,7 @@ default SDK bin path).
 ./tests/integration/run.sh --negative   # misconfigured run: exits NON-ZERO
 ```
 
-The harness fetches and boots the pinned **OpenWrt 25.12.5 x86-64** image under
+The harness fetches and boots the pinned **OpenWrt 25.12.6 x86-64** image under
 QEMU/KVM, drives it over the serial console (no SSH), injects the two built
 `.apk`s on an ext4 seed disk and **installs them with `apk`** alongside
 `sqm-scripts` + deps. It then brings up a two-WAN topology, enables SQM CAKE on
@@ -337,13 +337,13 @@ other, and commit the result alongside the doc change that needs it.
 
 ## Running in CI
 
-`.github/workflows/ci.yml` runs on every push / pull request, pinned to 25.12.5,
+`.github/workflows/ci.yml` runs on every push / pull request, pinned to 25.12.6,
 with four jobs:
 
 | Job | What it does | Artifact(s) |
 | --- | --- | --- |
 | **unit** | No `needs:` — runs `tests/run-unit.sh` against the bare checkout (no SDK, no `.apk`, no KVM) and reports in under a minute. | — |
-| **build** | Sets up the 25.12.5 SDK, registers this repo as a `src-link` feed, builds both noarch packages **once** (no per-arch matrix). | `cake-autorate-apks` |
+| **build** | Sets up the 25.12.6 SDK, registers this repo as a `src-link` feed, builds both noarch packages **once** (no per-arch matrix). | `cake-autorate-apks` |
 | **integration** | `needs: build`; boots the VM harness against the downloaded apks — positive run **and** the `--negative` self-test. | `integration-artifacts` |
 | **ui** | `needs: build`; runs the functional + visual Playwright suites and publishes the review gallery. | `ui-playwright-report`, `ui-gallery` |
 

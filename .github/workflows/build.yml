@@ -1,6 +1,6 @@
 # cake-autorate OpenWrt package + LuCI UI — reusable BUILD workflow.
 #
-# Sets up the pinned OpenWrt 25.12.5 SDK, registers THIS repo as a `src-link`
+# Sets up the pinned OpenWrt 25.12.6 SDK, registers THIS repo as a `src-link`
 # feed, builds net/cake-autorate + luci/luci-app-cake-autorate ONCE (packages
 # are PKG_ARCH:=all / noarch, so there is NO per-arch matrix), asserts the
 # results are complete, and uploads the .apk files as a workflow artifact.
@@ -12,7 +12,7 @@
 # release must ship exactly what CI tested.
 #
 # Feed policy: the SDK ships a feeds.conf.default that pins every upstream feed
-# (base, packages, luci, routing, telephony, video) to an exact 25.12.5 commit.
+# (base, packages, luci, routing, telephony, video) to an exact 25.12.6 commit.
 # This workflow APPENDS its own src-link to that file rather than replacing it --
 # luci-app-cake-autorate's Makefile does `include $(TOPDIR)/feeds/luci/luci.mk`,
 # so without the luci feed the app cannot build at all. Only the feeds that are
@@ -38,18 +38,18 @@ permissions:
   contents: read
 
 env:
-  # Single source of truth for the 25.12.5 pin.
-  OWRT_VERSION: "25.12.5"
-  SDK_NAME: "openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64"
-  SDK_ARCHIVE: "openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
-  SDK_URL_DIR: "https://downloads.openwrt.org/releases/25.12.5/targets/x86/64"
+  # Single source of truth for the 25.12.6 pin.
+  OWRT_VERSION: "25.12.6"
+  SDK_NAME: "openwrt-sdk-25.12.6-x86-64_gcc-14.3.0_musl.Linux-x86_64"
+  SDK_ARCHIVE: "openwrt-sdk-25.12.6-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+  SDK_URL_DIR: "https://downloads.openwrt.org/releases/25.12.6/targets/x86/64"
   # Where the .apk artifacts land inside the SDK, and what they are named.
   APK_SUBPATH: "bin/packages/x86_64/cakeautorate"
   APK_ARTIFACT: "cake-autorate-apks"
 
 jobs:
   build:
-    name: Build feed (OpenWrt 25.12.5 SDK)
+    name: Build feed (OpenWrt 25.12.6 SDK)
     runs-on: ubuntu-26.04
     outputs:
       # Literal, not ${{ env.APK_ARTIFACT }}: the `env` context is not reliably
@@ -88,7 +88,7 @@ jobs:
           key: owrt-sdk-${{ env.SDK_ARCHIVE }}
           path: ~/sdk-cache
 
-      - name: Download + extract the 25.12.5 SDK
+      - name: Download + extract the 25.12.6 SDK
         run: |
           mkdir -p ~/sdk-cache
           cd ~/sdk-cache
