@@ -276,6 +276,9 @@ cannot be computed by Renovate, so those bumps land as PRs that deliberately
 fail until a human refreshes the hash; the PR body carries the checklist. If you
 add a new place that names either version, add a matching pattern to
 `renovate.json` — and keep it non-overlapping with the existing ones.
+`renovate.json` also overrides `ignorePaths`: `config:recommended` ignores
+`**/tests/**`, which silently dropped every `tests/` site from the OpenWrt
+bump (and every npm update for `tests/ui`) until PR #42. Do not remove it.
 
 **One script owns every version field.**
 `.github/scripts/package-versions.sh` is the authority, and `release.yml`'s
