@@ -1,6 +1,6 @@
 # cake-autorate OpenWrt package + LuCI UI — Continuous Integration
 #
-# One workflow, five jobs, all pinned to OpenWrt 25.12.5:
+# One workflow, five jobs, all pinned to OpenWrt 25.12.6:
 #
 #   unit        Every off-device suite, via `tests/run-unit.sh`. Needs no SDK, no
 #               .apk and no KVM, so it has NO `needs:` and reports in well under
@@ -9,7 +9,7 @@
 #               tag, so a forgotten PKG_RELEASE bump surfaces on the PR that
 #               causes it rather than on the release tag, where it cannot be
 #               fixed in place. Seconds; no `needs:`.
-#   build       Delegates to the reusable `build.yml`: 25.12.5 SDK, this repo as
+#   build       Delegates to the reusable `build.yml`: 25.12.6 SDK, this repo as
 #               a `src-link` feed, both packages built ONCE (PKG_ARCH:=all /
 #               noarch, so there is NO per-arch matrix), .apk files uploaded as
 #               the `cake-autorate-apks` artifact. `release.yml` calls the same
@@ -53,11 +53,11 @@ permissions:
   contents: read
 
 env:
-  # The 25.12.5 pin for the VM-backed jobs. The SDK-side pins (archive name,
+  # The 25.12.6 pin for the VM-backed jobs. The SDK-side pins (archive name,
   # URL, apk output path) now live in build.yml, which is the only place that
   # touches the SDK -- a reusable workflow does NOT inherit the caller's env,
   # so duplicating them here would create two sources of truth for one version.
-  OWRT_VERSION: "25.12.5"
+  OWRT_VERSION: "25.12.6"
   # The artifact build.yml publishes; consumed by both jobs below.
   APK_ARTIFACT: "cake-autorate-apks"
 

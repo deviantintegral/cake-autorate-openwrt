@@ -112,9 +112,9 @@ script, set a sane starting bandwidth), and cake-autorate takes it from there.
 See [`docs/configuration.md`](docs/configuration.md) for the interface/rate
 setup.
 
-## Building with the OpenWrt 25.12.5 SDK
+## Building with the OpenWrt 25.12.6 SDK
 
-Everything is pinned to **OpenWrt 25.12.5**. Build the two noarch packages with
+Everything is pinned to **OpenWrt 25.12.6**. Build the two noarch packages with
 the release SDK — no full buildroot needed.
 
 The SDK compiles host tools, so a bare system needs the usual build chain first
@@ -129,8 +129,8 @@ sudo apt-get install -y --no-install-recommends \
 
 ```sh
 # 1. Fetch + extract the pinned SDK (x86-64 shown; any target works, noarch).
-SDK=openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64
-wget "https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/$SDK.tar.zst"
+SDK=openwrt-sdk-25.12.6-x86-64_gcc-14.3.0_musl.Linux-x86_64
+wget "https://downloads.openwrt.org/releases/25.12.6/targets/x86/64/$SDK.tar.zst"
 tar --use-compress-program=unzstd -xf "$SDK.tar.zst"
 cd "$SDK"
 
@@ -177,7 +177,7 @@ make package/luci-app-cake-autorate/compile V=s
 ```
 
 The resulting `.apk` files land under `bin/packages/x86_64/cakeautorate/`
-(noarch, so they install on any 25.12.5 target regardless of that path's arch
+(noarch, so they install on any 25.12.6 target regardless of that path's arch
 name).
 
 ## Installing (apk, not opkg)
@@ -273,9 +273,9 @@ warning the base package's postinst logs when its reload did not take.
 
 `.github/workflows/ci.yml` defines a four-job pipeline on every push / PR —
 **unit** (`tests/run-unit.sh`; no SDK, no VM, reports in under a minute),
-**build** (25.12.5 SDK, noarch, one build), **integration** (QEMU/KVM VM
+**build** (25.12.6 SDK, noarch, one build), **integration** (QEMU/KVM VM
 harness) and **ui** (Playwright functional + visual + review gallery) — pinned to
-25.12.5 throughout.
+25.12.6 throughout.
 
 The build recipe itself lives in `.github/workflows/build.yml`, a reusable
 workflow. `ci.yml` and `release.yml` both call it, so a release ships packages

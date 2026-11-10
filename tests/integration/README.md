@@ -1,6 +1,6 @@
 # cake-autorate OpenWrt VM integration harness
 
-Boots a **pinned OpenWrt 25.12.5 x86-64** VM under QEMU/KVM and proves, end to
+Boots a **pinned OpenWrt 25.12.6 x86-64** VM under QEMU/KVM and proves, end to
 end and unattended, that the built packages **install, configure, run, shape,
 and report** on a real system:
 

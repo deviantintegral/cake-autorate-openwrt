@@ -128,7 +128,7 @@ environment the baselines were captured in, the diff is a hard, meaningful check
          npx playwright test --project=functional
 
 2. **VM `--serve` mode (default / CI path)** — spawns
-   `tests/integration/run.sh --serve`, which boots the pinned OpenWrt 25.12.5
+   `tests/integration/run.sh --serve`, which boots the pinned OpenWrt 25.12.6
    VM, installs the built apks + deps, configures the two instances (primary +
    secondary), sets a known root password, opens the firewall for HTTP, brings
    up uhttpd, and **forwards guest :80 to host :8080** via QEMU

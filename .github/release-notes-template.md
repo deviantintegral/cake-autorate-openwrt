@@ -1,4 +1,4 @@
-Prebuilt **noarch** packages for **OpenWrt 25.12.5**, built from this tag by
+Prebuilt **noarch** packages for **OpenWrt 25.12.6**, built from this tag by
 `.github/workflows/release.yml` using the same recipe CI tests every commit
 with.
 

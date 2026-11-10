@@ -21,14 +21,14 @@ luci/luci-app-cake-autorate/  the LuCI UI (noarch; depends +cake-autorate +luci-
   htdocs/.../statistics/rrdtool/definitions/cake_autorate.js   graph definition
 docs/                         upstream inventory, UCI schema, config/testing references
 tests/                        unit suites + VM integration + Playwright UI
-.github/workflows/ci.yml      build + integration + ui, pinned to 25.12.5
+.github/workflows/ci.yml      build + integration + ui, pinned to 25.12.6
 ```
 
 Install paths on target: daemon `/usr/lib/cake-autorate/`, generated config
 `/etc/cake-autorate/config.<instance>.sh`, bridge
 `/usr/libexec/cake-autorate/`, collectd reader `/usr/libexec/collectd/`, rpcd
 backend `/usr/libexec/rpcd/cake-autorate`. Per instance the log is
-`/var/log/cake-autorate.<instance>.log`. **Target is OpenWrt 25.12.5; install
+`/var/log/cake-autorate.<instance>.log`. **Target is OpenWrt 25.12.6; install
 with `apk` (not `opkg`).**
 
 ## Invariant 1 — the UCI→config bridge is bidirectional
@@ -246,7 +246,7 @@ npx playwright test --project=visual
 npx playwright test --project=visual --update-snapshots   # refresh baselines
 ```
 
-CI (`.github/workflows/ci.yml`, pinned 25.12.5) runs four jobs on push/PR —
+CI (`.github/workflows/ci.yml`, pinned 25.12.6) runs four jobs on push/PR —
 **unit** (`tests/run-unit.sh`, no `needs:`, so it reports in under a minute),
 **build** (SDK, noarch, artifact `cake-autorate-apks`), **integration**
 (`integration-artifacts`) and **ui** (`ui-playwright-report`, `ui-gallery`).
@@ -276,6 +276,9 @@ cannot be computed by Renovate, so those bumps land as PRs that deliberately
 fail until a human refreshes the hash; the PR body carries the checklist. If you
 add a new place that names either version, add a matching pattern to
 `renovate.json` — and keep it non-overlapping with the existing ones.
+`renovate.json` also overrides `ignorePaths`: `config:recommended` ignores
+`**/tests/**`, which silently dropped every `tests/` site from the OpenWrt
+bump (and every npm update for `tests/ui`) until PR #42. Do not remove it.
 
 **One script owns every version field.**
 `.github/scripts/package-versions.sh` is the authority, and `release.yml`'s

@@ -406,7 +406,7 @@ class Harness:
         # Induce sustained download load on the PRIMARY WAN (eth1). The ingress
         # CAKE on ifb4eth1 is capped low, so the download saturates it -> high
         # load with a low-latency reflector -> the loop raises the rate.
-        loadurl = "http://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-25.12.5-x86-64-generic-ext4-combined.img.gz"
+        loadurl = "http://downloads.openwrt.org/releases/25.12.6/targets/x86/64/openwrt-25.12.6-x86-64-generic-ext4-combined.img.gz"
         self.g("( for i in $(seq 1 40); do wget -q -O /dev/null '%s' 2>/dev/null; done ) >/dev/null 2>&1 &"
                " echo load_pid=$!" % loadurl)
         peak = bw0 or 0
@@ -613,8 +613,8 @@ class Harness:
         # shaper when there is load to react to; without this every series is a
         # flat line at base and the screenshot says nothing about what the
         # dashboard is for.
-        loadurl = ("http://downloads.openwrt.org/releases/25.12.5/targets/x86/64/"
-                   "openwrt-25.12.5-x86-64-generic-ext4-combined.img.gz")
+        loadurl = ("http://downloads.openwrt.org/releases/25.12.6/targets/x86/64/"
+                   "openwrt-25.12.6-x86-64-generic-ext4-combined.img.gz")
         self.g("( for i in $(seq 1 200); do wget -q -O /dev/null '%s' 2>/dev/null; done ) "
                ">/dev/null 2>&1 & echo load-started" % loadurl)
 
