@@ -5,7 +5,7 @@
 #   ./tests/integration/run.sh --negative   # broken config, exits NON-ZERO
 #                                           # (shows the checks have teeth)
 #
-# Boots a pinned OpenWrt 25.12.5 x86-64 VM under QEMU/KVM, installs the built
+# Boots a pinned OpenWrt 25.12.6 x86-64 VM under QEMU/KVM, installs the built
 # .apk packages plus sqm-scripts and its dependencies, applies a two-instance
 # cake-autorate config over two SQM CAKE WANs, puts a download load on it so the
 # control loop moves the CAKE bandwidth, and checks the outcome. Evidence lands
@@ -26,13 +26,13 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 CACHE="${CA_IT_CACHE:-/tmp/ca-it-cache}"
 ART="$HERE/artifacts"
 MEM="${CA_IT_MEM:-1024}"
-IMG_VER="25.12.5"
+IMG_VER="25.12.6"
 IMG_BASE="openwrt-${IMG_VER}-x86-64-generic-ext4-combined.img"
 IMG_URL="https://downloads.openwrt.org/releases/${IMG_VER}/targets/x86/64/${IMG_BASE}.gz"
 # Renovate rewrites IMG_VER above (see the custom manager in renovate.json) but
 # cannot compute this -- a version-bump PR ships a stale hash on purpose and the
 # check below fails loudly. Refresh it from the release's sha256sums file.
-IMG_SHA256="23e2538e8ab0eb52dfed1c65d608ecdb71ffd432dd54885da138ae67cd9e4461"  # of the .gz
+IMG_SHA256="f8538784d0288b4133a99ac2a68443e4922ffde6343e80df56a5882364b9d499"  # of the .gz
 APK_DIR="${CA_IT_APK_DIR:-/tmp/owrt-sdk/openwrt-sdk-${IMG_VER}-x86-64_gcc-14.3.0_musl.Linux-x86_64/bin/packages/x86_64/cakeautorate}"
 
 NEG=""

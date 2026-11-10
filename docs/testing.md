@@ -56,7 +56,7 @@ NOTE and are covered on-device by the VM harness instead.
 ## Building the apks first
 
 Both VM suites install the two **noarch** `.apk`s. Build them with the pinned
-25.12.6 SDK (full steps in the [README](../README.md#building-with-the-openwrt-251205-sdk)):
+25.12.6 SDK (full steps in the [README](../README.md#building-with-the-openwrt-251206-sdk)):
 
 ```sh
 make package/cake-autorate/compile V=s
